@@ -169,8 +169,11 @@
   <section>
     <h2>Equity curve</h2>
     <div class="card">
-      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-        <div class="card-label" style="margin:0;">PAPER BALANCE OVER TIME · 1.0 → 21.0 SOL</div>
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; gap:10px; flex-wrap:wrap;">
+        <div style="display:flex; align-items:center; gap:8px;">
+          <div class="card-label" style="margin:0;">PAPER BALANCE OVER TIME</div>
+          <span id="liveBadge" style="font-size:9px; color:rgba(0,221,119,0.7); letter-spacing:1px;"></span>
+        </div>
         <div style="display:flex; gap:4px;">
           <button class="chart-tog active" data-mode="sol">SOL</button>
           <button class="chart-tog" data-mode="pnl">PNL %</button>
@@ -340,13 +343,29 @@ document.querySelectorAll('.chart-tog').forEach(btn => {
 
 async function loadData() {
   try {
-    const r = await fetch('equity_data.json', { cache: 'no-cache' });
+    // Cache-bust on every fetch so we always get the freshest pushed snapshot.
+    const r = await fetch('equity_data.json?t=' + Date.now(), { cache: 'no-store' });
     const d = await r.json();
     snapshots = d.snapshots || [];
     drawChart();
+    updateLiveBadge(d.generated_at);
   } catch (e) {
     console.error('Could not load equity data', e);
   }
+}
+
+function updateLiveBadge(genAt) {
+  const el = document.getElementById('liveBadge');
+  if (!el) return;
+  if (genAt) window.__lastGen = genAt;
+  const useGen = genAt || window.__lastGen;
+  if (!useGen) { el.textContent = ''; return; }
+  const ageS = Math.max(0, Math.floor(Date.now()/1000 - useGen));
+  let label;
+  if (ageS < 60)        label = ageS + 's ago';
+  else if (ageS < 3600) label = Math.floor(ageS/60) + 'm ago';
+  else                  label = Math.floor(ageS/3600) + 'h ago';
+  el.textContent = '· LIVE · data ' + label;
 }
 
 function drawChart() {
@@ -503,6 +522,16 @@ function drawChart() {
 }
 
 loadData();
+// Poll for fresh equity_data.json every 10 seconds. The auto-updater script
+// running on the bot's machine pushes a new snapshot to GitHub every ~5 min,
+// so the chart will update at that cadence without anyone needing to refresh.
+setInterval(loadData, 10000);
+// Tick the "data X ago" badge once a second between fetches
+setInterval(() => {
+  const meta = document.getElementById('liveBadge');
+  if (!meta || !window.__lastGen) return;
+  updateLiveBadge(window.__lastGen);
+}, 1000);
 window.addEventListener('resize', () => drawChart());
 </script>
 </body>

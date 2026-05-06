@@ -201,8 +201,21 @@ class WebDashboard:
         })
 
     # ── Server lifecycle ──────────────────────────────────────────────────────
+    @web.middleware
+    async def _cors_middleware(self, request, handler):
+        # Allow the GitHub Pages portfolio site to fetch /api/* across origins.
+        # Read-only API; no credentials sent.
+        if request.method == "OPTIONS":
+            resp = web.Response(status=204)
+        else:
+            resp = await handler(request)
+        resp.headers["Access-Control-Allow-Origin"]  = "*"
+        resp.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        return resp
+
     async def run(self):
-        app = web.Application()
+        app = web.Application(middlewares=[self._cors_middleware])
         app.router.add_get("/",              self.index)
         app.router.add_get("/api/status",    self.api_status)
         app.router.add_get("/api/positions", self.api_positions)
