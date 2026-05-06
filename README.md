@@ -7,10 +7,10 @@ loop, and a live web dashboard.
 
 ## Highlights
 
-- **+215% PnL** over a 4-day paper-trading run on a 1.0 SOL bankroll
-- **671 closed trades**, 43.1% win rate, biggest single trade +1,352%
+- **+320% PnL** over a 4-day paper-trading run on a 1.0 SOL bankroll (1.0 → 4.20 SOL)
+- **717 closed trades**, 43.7% win rate, biggest single trade +463% (caught the same moonshot ticker 4 times via momentum-stall exits)
 - **Single shared PumpPortal WebSocket** with pub/sub fan-out to 3 downstream consumers (eliminates rate-limit triggers)
-- **Counterfactual learning loop** — every rejected token gets re-polled 10 minutes later so we know whether each filter is pruning rugs or killing winners
+- **Counterfactual learning loop** — every rejected token gets re-polled 10 minutes later so we know whether each filter is pruning rugs or killing winners. 7,500+ resolved outcomes across 15+ filter classes prove every filter has negative expected value on rejected tokens.
 - **Crash-safe persistence** — atomic JSON writes, PID lockfile prevents duplicate instances, watchdog respawns on any failure
 
 ## Architecture

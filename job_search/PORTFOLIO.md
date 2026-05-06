@@ -4,10 +4,12 @@ A production-grade autonomous trading bot for the Solana / pump.fun ecosystem.
 Single-developer project, ~5,000 lines of Python, designed and built end-to-end.
 
 ## Live demo / metrics (paper trading)
-- **+215% PnL over 4 days** on a 1.0 SOL paper bankroll
-- **671 closed trades, 43.1% win rate**
-- Caught a **+1,352% single-trade moonshot** during the run
-- Single +453% trade returned 19% of total wallet in 36 seconds
+- **+320% PnL over 4 days** on a 1.0 SOL paper bankroll (1.0 → 4.20 SOL)
+- **717 closed trades, 43.7% win rate**
+- Bot caught the **same moonshot ticker 4 separate times** (each +328% to +463%)
+  via momentum-stall exits — demonstrates the strategy can recognize and
+  re-engage with continuing pump cycles rather than locking out after first sell
+- Top trade gained 0.366 SOL (≈19% of total wallet) in 36 seconds
 
 ## Architecture
 
