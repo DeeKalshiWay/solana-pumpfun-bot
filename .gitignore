@@ -1,0 +1,79 @@
+# ════════════════════════════════════════════════════════════════════
+# CRITICAL: NEVER COMMIT THESE
+# ════════════════════════════════════════════════════════════════════
+# Your Solana private key + Helius API key live here. Committing this
+# file = wallet drained + paid API key abused by anyone who finds the
+# repo. Even private repos can leak. Just never commit it.
+.env
+.env.*
+!.env.example
+
+# ════════════════════════════════════════════════════════════════════
+# Bot state and operational logs (not secret but personal/large/noise)
+# ════════════════════════════════════════════════════════════════════
+logs/
+*.log
+*.log.gz
+*.jsonl
+bot.pid
+paper_wallet.json
+risk_state.json
+closed_trades.jsonl
+creators.json
+creators.json.broken
+creators.json.tmp
+bot_wallets.json
+bot_wallets.json.tmp
+bundled_launches.json
+bundled_launches.json.tmp
+counterfactual.jsonl
+counterfactual_pending.jsonl
+report.jsonl
+influencers.json
+job_search/reminder.log
+job_search/applications.md
+
+# ════════════════════════════════════════════════════════════════════
+# Python
+# ════════════════════════════════════════════════════════════════════
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# ════════════════════════════════════════════════════════════════════
+# IDE / OS junk
+# ════════════════════════════════════════════════════════════════════
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ════════════════════════════════════════════════════════════════════
+# CRITICAL: Personal / private files (DO NOT PUSH)
+# These contain personal context, legal docs, and Claude session state.
+# ════════════════════════════════════════════════════════════════════
+.claude/
+CLAUDE.md
+TASKS.md
+memory/
+
+# ════════════════════════════════════════════════════════════════════
+# Misc
+# ════════════════════════════════════════════════════════════════════
+fix.py
+manual_trade.py
+_restart_clean.ps1
+dashboard.html
+*.tmp
