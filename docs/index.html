@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Solana Pump.fun Trading Bot · Portfolio</title>
+<meta name="description" content="Production async Python trading bot for Solana pump.fun ecosystem. +2,020% paper PnL, 1,521 trades, counterfactual learning loop.">
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --gold: #ffc800;
+    --gold-dim: rgba(255,200,0,0.13);
+    --gold-faint: rgba(255,200,0,0.05);
+    --bg: #07090c;
+    --text: #ddd4b8;
+    --text-dim: rgba(221,212,184,0.55);
+    --green: #00dd77;
+    --red: #ff4040;
+    --blue: #4db8ff;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'DM Mono', monospace;
+    min-height: 100vh;
+    line-height: 1.7;
+  }
+  body::before {
+    content: ''; position: fixed; inset: 0;
+    background-image:
+      linear-gradient(rgba(255,200,0,0.022) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,200,0,0.022) 1px, transparent 1px);
+    background-size: 44px 44px;
+    pointer-events: none; z-index: 0;
+  }
+  @keyframes scan { 0%{transform:translateY(-5px)} 100%{transform:translateY(100vh)} }
+  .scanline {
+    position: fixed; top:0; left:0; right:0; height:2px;
+    background: linear-gradient(transparent, rgba(255,200,0,0.07), transparent);
+    animation: scan 6s linear infinite; pointer-events:none; z-index:1;
+  }
+  .wrap { position: relative; z-index: 2; max-width: 880px; margin: 0 auto; padding: 40px 24px 80px; }
+  .hero {
+    text-align: center; padding: 40px 0 30px;
+    border-bottom: 1px solid rgba(255,200,0,0.15);
+    margin-bottom: 36px;
+  }
+  h1 {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 64px; color: var(--gold); letter-spacing: 8px; line-height: 1;
+  }
+  .subtitle {
+    font-size: 11px; letter-spacing: 4px; color: rgba(255,200,0,0.45);
+    margin-top: 8px; text-transform: uppercase;
+  }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 28px; }
+  .stat {
+    padding: 16px 12px; border: 1px solid rgba(255,200,0,0.15);
+    background: var(--gold-faint); text-align: center; border-radius: 2px;
+  }
+  .stat-val { font-family: 'Bebas Neue', sans-serif; font-size: 32px; color: var(--gold); letter-spacing: 2px; line-height: 1.1; }
+  .stat-val.green { color: var(--green); }
+  .stat-label { font-size: 9px; color: var(--text-dim); letter-spacing: 2px; margin-top: 4px; }
+  h2 {
+    font-family: 'Bebas Neue', sans-serif; font-size: 22px;
+    color: var(--gold); letter-spacing: 4px;
+    margin: 32px 0 12px;
+    padding-bottom: 8px; border-bottom: 1px solid rgba(255,200,0,0.12);
+  }
+  p { font-size: 13px; color: rgba(221,212,184,0.85); margin-bottom: 12px; }
+  ul { padding-left: 20px; margin-bottom: 12px; }
+  li { font-size: 13px; color: rgba(221,212,184,0.85); margin-bottom: 6px; }
+  code {
+    background: rgba(255,200,0,0.07); color: var(--gold);
+    padding: 1px 5px; border-radius: 2px; font-size: 12px;
+  }
+  .card {
+    border: 1px solid rgba(255,200,0,0.12);
+    background: var(--gold-faint);
+    padding: 18px; margin-bottom: 16px; border-radius: 2px;
+  }
+  .card-label { font-size: 9px; letter-spacing: 3px; color: rgba(255,200,0,0.42); margin-bottom: 10px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; padding: 8px 10px; font-size: 9px; letter-spacing: 2px;
+       color: rgba(255,200,0,0.45); border-bottom: 1px solid rgba(255,200,0,0.12); font-weight: 400; }
+  td { padding: 8px 10px; border-bottom: 1px solid rgba(255,200,0,0.06); }
+  td.gold { color: var(--gold); }
+  td.green { color: var(--green); }
+  td.red { color: var(--red); }
+  .cta {
+    display: inline-block; padding: 14px 28px;
+    border: 1px solid rgba(255,200,0,0.4);
+    background: var(--gold-dim); color: var(--gold);
+    font-family: 'Bebas Neue', sans-serif; font-size: 18px; letter-spacing: 6px;
+    text-decoration: none; border-radius: 2px;
+    transition: all 0.15s; margin-right: 10px; margin-bottom: 10px;
+  }
+  .cta:hover { background: var(--gold); color: var(--bg); }
+  .pill {
+    display: inline-block; padding: 2px 8px; border-radius: 2px;
+    font-size: 9px; letter-spacing: 2px; font-weight: 700; text-transform: uppercase;
+    margin-right: 6px;
+  }
+  .pill.green { background:rgba(0,221,119,0.12); border:1px solid rgba(0,221,119,0.3); color:var(--green); }
+  .pill.gold  { background:rgba(255,200,0,0.12); border:1px solid rgba(255,200,0,0.3); color:var(--gold); }
+  .pill.blue  { background:rgba(77,184,255,0.12); border:1px solid rgba(77,184,255,0.3); color:var(--blue); }
+  .footer {
+    text-align: center; font-size: 10px; color: rgba(255,200,0,0.25);
+    margin-top: 40px; padding-top: 20px; border-top: 1px solid rgba(255,200,0,0.07);
+    letter-spacing: 2px;
+  }
+  .disclaimer {
+    font-size: 11px; color: var(--text-dim);
+    background: rgba(255,64,64,0.05); border-left: 2px solid rgba(255,64,64,0.4);
+    padding: 12px 14px; margin: 20px 0; border-radius: 2px;
+  }
+  @media (max-width: 700px) {
+    h1 { font-size: 40px; }
+    .stats { grid-template-columns: repeat(2, 1fr); }
+  }
+</style>
+</head>
+<body>
+<div class="scanline"></div>
+<div class="wrap">
+
+  <!-- Hero -->
+  <section class="hero">
+    <h1>PUMP BOT</h1>
+    <div class="subtitle">SOLANA · PUMP.FUN · AUTONOMOUS TRADING SYSTEM</div>
+
+    <div class="stats">
+      <div class="stat">
+        <div class="stat-val green">+2,020%</div>
+        <div class="stat-label">PAPER PNL · 5 DAYS</div>
+      </div>
+      <div class="stat">
+        <div class="stat-val">1,521</div>
+        <div class="stat-label">CLOSED TRADES</div>
+      </div>
+      <div class="stat">
+        <div class="stat-val">45.6%</div>
+        <div class="stat-label">WIN RATE</div>
+      </div>
+      <div class="stat">
+        <div class="stat-val">8,442</div>
+        <div class="stat-label">COUNTERFACTUAL OUTCOMES</div>
+      </div>
+    </div>
+
+    <div style="margin-top: 30px;">
+      <a class="cta" href="https://github.com/DeeKalshiWay/solana-pumpfun-bot">VIEW SOURCE ON GITHUB</a>
+      <a class="cta" href="#architecture">ARCHITECTURE</a>
+    </div>
+  </section>
+
+  <!-- What it does -->
+  <section>
+    <h2>What it does</h2>
+    <p>Autonomous trading bot for the Solana pump.fun ecosystem. Detects new token
+    launches via single-shared PumpPortal WebSocket, scores them across four factors,
+    sizes positions adaptively based on rolling win rate, and exits via a moonshot-optimized
+    take-profit ladder with adaptive trailing stops. Captures power-law winners while
+    capping individual losses at -10%.</p>
+
+    <p>Built end-to-end in async Python. ~5,000 lines, fourteen modules, single developer.</p>
+  </section>
+
+  <!-- Architecture -->
+  <section id="architecture">
+    <h2>Architecture</h2>
+    <div class="card">
+      <div class="card-label">DATA FLOW</div>
+      <p style="font-size: 12px; line-height: 2;">
+        <code>PumpPortal WS</code> → <code>pub/sub fan-out</code> → 3 consumers
+        (<code>tracker</code>, <code>wallet_intel</code>, <code>monitor</code>)
+        → <code>signal_scorer</code> → <code>trade_loop</code> → <code>trader/executor</code>
+        (Jupiter or PumpPortal local-tx) → <code>risk_manager</code> watches positions
+        → exits via TP ladder, trailing stop, or breaker
+      </p>
+    </div>
+
+    <table style="margin-top: 16px;">
+      <thead><tr><th>Module</th><th>Lines</th><th>Responsibility</th></tr></thead>
+      <tbody>
+        <tr><td class="gold">detector/pumpfun_monitor</td><td>~210</td><td>Single shared PumpPortal WS, pub/sub fan-out</td></tr>
+        <tr><td class="gold">detector/wallet_intel</td><td>~210</td><td>Bot-wallet accumulator + bundled-launch detection</td></tr>
+        <tr><td class="gold">detector/creator_tracker</td><td>~180</td><td>Persistent leaderboard of pump.fun creators</td></tr>
+        <tr><td class="gold">analyzer/signal_scorer</td><td>~370</td><td>4-factor 0-100 score, hard filters, queueing</td></tr>
+        <tr><td class="gold">analyzer/counterfactual</td><td>~190</td><td>Re-polls rejected tokens 10 min later</td></tr>
+        <tr><td class="gold">risk/manager</td><td>~470</td><td>Sizing, TP ladder, stops, circuit breakers</td></tr>
+        <tr><td class="gold">trader/executor</td><td>~250</td><td>Smart router: Jupiter vs PumpPortal local-tx</td></tr>
+        <tr><td class="gold">logger/web_server</td><td>~210</td><td>aiohttp dashboard at :8765, 7 API endpoints</td></tr>
+        <tr><td class="gold">web/dashboard.html</td><td>~1100</td><td>Single-file SPA with custom SVG equity chart</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- Edge -->
+  <section>
+    <h2>Where the edge comes from</h2>
+
+    <div class="card">
+      <div class="card-label">1. ADAPTIVE POSITION SIZING (KELLY-LITE)</div>
+      <p>Rolling 20-trade win rate scales position size: <code>0.6×</code> when cold (≤30% WR),
+      <code>1.0×</code> normal, <code>2.0×</code> when hot (≥55% WR). Captures more SOL during
+      momentum stretches, less during regime shifts. Hard cap at 2.5× to prevent ruin.</p>
+    </div>
+
+    <div class="card">
+      <div class="card-label">2. MOONSHOT-OPTIMIZED TAKE-PROFIT LADDER</div>
+      <p>Sells small slices at <code>+75%</code> / <code>+300%</code> / <code>+800%</code>,
+      keeps final 30% riding the trailing stop with no upper cap. Trailing widens to
+      <code>35%</code> from peak once peak exceeds <code>+100%</code> so power-law winners
+      aren't clipped on normal pullbacks.</p>
+    </div>
+
+    <div class="card">
+      <div class="card-label">3. COUNTERFACTUAL LEARNING LOOP</div>
+      <p>Every rejected token gets re-polled 10 min later for market-cap delta. After
+      <strong>8,442 resolved outcomes</strong> across 15+ filter classes, every filter shows
+      strongly negative average outcome on rejects (e.g. <code>score_band_10</code> avg <code>−49.5%</code>,
+      <code>whale_init</code> avg <code>−27%</code>, <code>sym_blacklist_TEST</code> 100% rug rate). The strategy is
+      validated, not assumed.</p>
+    </div>
+
+    <div class="card">
+      <div class="card-label">4. CIRCUIT BREAKERS</div>
+      <p>Three independent layers: <code>6 consecutive losses → 10 min pause</code>,
+      <code>−25% day → halt until UTC midnight</code>, <code>−40% lifetime → emergency stop</code>.
+      Fired 5 times overnight, each preventing what would have been deeper losses during
+      regime shifts.</p>
+    </div>
+  </section>
+
+  <!-- Stack -->
+  <section>
+    <h2>Tech stack</h2>
+    <p>
+      <span class="pill gold">Python 3.14</span>
+      <span class="pill gold">asyncio</span>
+      <span class="pill gold">aiohttp</span>
+      <span class="pill gold">websockets</span>
+      <span class="pill gold">solders</span>
+      <span class="pill blue">Solana RPC</span>
+      <span class="pill blue">Helius</span>
+      <span class="pill blue">Jupiter</span>
+      <span class="pill blue">PumpPortal</span>
+      <span class="pill green">SVG</span>
+      <span class="pill green">Custom dashboard</span>
+      <span class="pill green">PowerShell</span>
+      <span class="pill green">Windows Task Scheduler</span>
+    </p>
+  </section>
+
+  <!-- Production -->
+  <section>
+    <h2>Production reliability</h2>
+    <ul>
+      <li><strong>Single-instance enforcement</strong> via PID lockfile — duplicate launches refuse with exit code 2</li>
+      <li><strong>Atomic JSON writes</strong> (write-temp + os.replace) so file corruption is impossible mid-crash</li>
+      <li><strong>Watchdog auto-restart</strong> with exponential backoff on rapid crashes</li>
+      <li><strong>WS rate-limit handling</strong> — exponential backoff up to 5 min on HTTP 403</li>
+      <li><strong>Log rotation</strong> with gzip (20 MB threshold, 5-rotation ceiling)</li>
+      <li><strong>Counterfactual file auto-trim</strong> at 5 MB to bound disk usage</li>
+      <li><strong>Crash-safe state</strong> — closed trades, creator leaderboard, paper wallet all persist</li>
+    </ul>
+  </section>
+
+  <!-- Disclaimer -->
+  <div class="disclaimer">
+    <strong>Performance disclaimer:</strong> these are paper-trading results. Live trading
+    diverges 30–50% due to real slippage (5–30% per round-trip on volatile pump.fun
+    tokens), public-RPC latency (1–3s), MEV bots front-running, and tx failure rates.
+    Realistic live-vs-paper retention: ~50% of paper EV. Never trade money you cannot
+    afford to lose. Pump.fun has &gt;95% rug rate.
+  </div>
+
+  <!-- CTA -->
+  <section style="text-align: center; margin-top: 40px;">
+    <a class="cta" href="https://github.com/DeeKalshiWay/solana-pumpfun-bot">GitHub repo</a>
+    <a class="cta" href="https://github.com/DeeKalshiWay">My profile</a>
+  </section>
+
+  <div class="footer">
+    BUILT BY DENNIS WELLS · 2026 · MIT LICENSE · NOT FINANCIAL ADVICE
+  </div>
+
+</div>
+</body>
+</html>
