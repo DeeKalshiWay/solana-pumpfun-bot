@@ -519,12 +519,12 @@
       "closed_trades": 1642
     },
     {
-      "ts": 1778094199,
-      "balance_sol": 22.332086,
+      "ts": 1778094501,
+      "balance_sol": 22.34289,
       "starting_sol": 1.0,
-      "pnl_pct": 2133.21,
-      "closed_trades": 1675
+      "pnl_pct": 2134.29,
+      "closed_trades": 1683
     }
   ],
-  "generated_at": 1778094199
+  "generated_at": 1778094501
 }
