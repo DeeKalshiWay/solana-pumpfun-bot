@@ -505,13 +505,19 @@
       "closed_trades": 1493
     },
     {
-      "ts": 1778088348,
-      "balance_sol": 21.003558,
+      "ts": 1778089261,
+      "balance_sol": 21.055462,
       "starting_sol": 1.0,
-      "pnl_pct": 2000.36,
-      "closed_trades": 1532
+      "pnl_pct": 1549.99,
+      "closed_trades": 1541
+    },
+    {
+      "ts": 1778089350,
+      "balance_sol": 21.158236,
+      "starting_sol": 1.0,
+      "pnl_pct": 2015.82,
+      "closed_trades": 1546
     }
   ],
-  "generated_at": 1778088348,
-  "label": "Paper trading run \u00b7 1.0 SOL bankroll"
+  "generated_at": 1778089350
 }
