@@ -115,6 +115,16 @@
     background: rgba(255,64,64,0.05); border-left: 2px solid rgba(255,64,64,0.4);
     padding: 12px 14px; margin: 20px 0; border-radius: 2px;
   }
+  /* Chart toggle buttons */
+  .chart-tog {
+    background: transparent; border: 1px solid rgba(255,200,0,0.15);
+    color: rgba(255,200,0,0.4);
+    font-family: 'Bebas Neue', sans-serif; font-size: 11px; letter-spacing: 3px;
+    padding: 5px 10px; cursor: pointer; transition: all 0.15s; border-radius: 2px;
+  }
+  .chart-tog:hover { color: rgba(255,200,0,0.7); border-color: rgba(255,200,0,0.35); }
+  .chart-tog.active { background: var(--gold-dim); border-color: rgba(255,200,0,0.5); color: var(--gold); }
+
   @media (max-width: 700px) {
     h1 { font-size: 40px; }
     .stats { grid-template-columns: repeat(2, 1fr); }
@@ -152,6 +162,30 @@
     <div style="margin-top: 30px;">
       <a class="cta" href="https://github.com/DeeKalshiWay/solana-pumpfun-bot">VIEW SOURCE ON GITHUB</a>
       <a class="cta" href="#architecture">ARCHITECTURE</a>
+    </div>
+  </section>
+
+  <!-- Equity curve -->
+  <section>
+    <h2>Equity curve</h2>
+    <div class="card">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+        <div class="card-label" style="margin:0;">PAPER BALANCE OVER TIME · 1.0 → 21.0 SOL</div>
+        <div style="display:flex; gap:4px;">
+          <button class="chart-tog active" data-mode="sol">SOL</button>
+          <button class="chart-tog" data-mode="pnl">PNL %</button>
+          <button class="chart-tog" data-mode="trades">TRADES</button>
+        </div>
+      </div>
+      <div id="chartHost" style="position:relative; width:100%; height:280px;">
+        <svg id="equityChart" width="100%" height="280" preserveAspectRatio="none"></svg>
+        <div id="chartTooltip" style="position:absolute; pointer-events:none; padding:8px 11px; background:rgba(7,9,12,0.97); border:1px solid rgba(255,200,0,0.45); border-radius:3px; font-size:10px; color:var(--gold); line-height:1.6; display:none; z-index:5; white-space:nowrap; box-shadow:0 4px 12px rgba(0,0,0,0.6);"></div>
+      </div>
+      <div style="display:flex; justify-content:space-between; font-size:9px; color:var(--text-dim); letter-spacing:2px; margin-top:6px;">
+        <span id="chartStart">--</span>
+        <span style="color:var(--text-dim);">hover for details</span>
+        <span id="chartLatest">--</span>
+      </div>
     </div>
   </section>
 
@@ -288,5 +322,188 @@
   </div>
 
 </div>
+
+<script>
+// ── Equity chart — static snapshot baked into the portfolio page ─────────────
+let chartMode = 'sol';
+let snapshots = [];
+const NS = "http://www.w3.org/2000/svg";
+
+document.querySelectorAll('.chart-tog').forEach(btn => {
+  btn.onclick = () => {
+    document.querySelectorAll('.chart-tog').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    chartMode = btn.dataset.mode;
+    drawChart();
+  };
+});
+
+async function loadData() {
+  try {
+    const r = await fetch('equity_data.json', { cache: 'no-cache' });
+    const d = await r.json();
+    snapshots = d.snapshots || [];
+    drawChart();
+  } catch (e) {
+    console.error('Could not load equity data', e);
+  }
+}
+
+function drawChart() {
+  const svg = document.getElementById('equityChart');
+  const tip = document.getElementById('chartTooltip');
+  if (!svg || snapshots.length < 2) return;
+  while (svg.firstChild) svg.removeChild(svg.firstChild);
+
+  const W = svg.clientWidth || 800;
+  const H = 280;
+  const PAD_L = 56, PAD_R = 14, PAD_T = 14, PAD_B = 28;
+  const innerW = W - PAD_L - PAD_R;
+  const innerH = H - PAD_T - PAD_B;
+
+  const valFn = chartMode === 'pnl'    ? (s => s.pnl_pct)
+              : chartMode === 'trades' ? (s => s.closed_trades)
+              :                           (s => s.balance_sol);
+  const fmtFn = chartMode === 'pnl'    ? (v => (v >= 0 ? '+' : '') + v.toFixed(0) + '%')
+              : chartMode === 'trades' ? (v => Math.round(v).toString())
+              :                           (v => v.toFixed(2) + ' SOL');
+  const refVal = chartMode === 'pnl'    ? 0
+               : chartMode === 'trades' ? null
+               :                           (snapshots[0].starting_sol || 1);
+
+  const ts0 = snapshots[0].ts, tsN = snapshots[snapshots.length-1].ts;
+  const tspan = (tsN - ts0) || 1;
+
+  const values = snapshots.map(valFn);
+  const minV = Math.min(...values, refVal != null ? refVal : Infinity);
+  const maxV = Math.max(...values, refVal != null ? refVal : -Infinity);
+  const range = (maxV - minV) || 1;
+  const pad = range * 0.1;
+  const yMin = minV - pad, yMax = maxV + pad;
+
+  const x = ts => PAD_L + ((ts - ts0) / tspan) * innerW;
+  const y = v  => PAD_T + (1 - (v - yMin) / (yMax - yMin)) * innerH;
+
+  // Y-axis grid + labels
+  for (let i = 0; i < 4; i++) {
+    const yy = PAD_T + (i / 3) * innerH;
+    const v  = yMax - (i / 3) * (yMax - yMin);
+    const ln = document.createElementNS(NS, "line");
+    ln.setAttribute("x1", PAD_L); ln.setAttribute("x2", W - PAD_R);
+    ln.setAttribute("y1", yy);    ln.setAttribute("y2", yy);
+    ln.setAttribute("stroke", "rgba(255,200,0,0.07)");
+    svg.appendChild(ln);
+    const tx = document.createElementNS(NS, "text");
+    tx.setAttribute("x", 6); tx.setAttribute("y", yy + 3);
+    tx.setAttribute("fill", "rgba(255,200,0,0.4)");
+    tx.setAttribute("font-size", "9");
+    tx.setAttribute("font-family", "DM Mono, monospace");
+    tx.textContent = fmtFn(v);
+    svg.appendChild(tx);
+  }
+
+  // X-axis time labels (start, mid, end)
+  for (let i = 0; i <= 2; i++) {
+    const tsAt = ts0 + (i / 2) * tspan;
+    const xx = x(tsAt);
+    const tx = document.createElementNS(NS, "text");
+    tx.setAttribute("x", xx);
+    tx.setAttribute("y", H - 6);
+    tx.setAttribute("fill", "rgba(255,200,0,0.35)");
+    tx.setAttribute("font-size", "8");
+    tx.setAttribute("font-family", "DM Mono, monospace");
+    tx.setAttribute("text-anchor", i === 0 ? "start" : i === 2 ? "end" : "middle");
+    const d = new Date(tsAt * 1000);
+    tx.textContent = d.toLocaleDateString([], {month:'numeric',day:'numeric'}) + ' ' +
+                     d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+    svg.appendChild(tx);
+  }
+
+  // Reference line (starting balance / zero PnL)
+  if (refVal != null && refVal >= yMin && refVal <= yMax) {
+    const refY = y(refVal);
+    const ref = document.createElementNS(NS, "line");
+    ref.setAttribute("x1", PAD_L); ref.setAttribute("x2", W - PAD_R);
+    ref.setAttribute("y1", refY); ref.setAttribute("y2", refY);
+    ref.setAttribute("stroke", "rgba(255,200,0,0.4)");
+    ref.setAttribute("stroke-dasharray", "3 4");
+    svg.appendChild(ref);
+  }
+
+  // Equity polyline
+  const lastVal = valFn(snapshots[snapshots.length-1]);
+  const stroke = (chartMode === 'trades') ? "#ffc800"
+              : (lastVal >= (refVal ?? lastVal)) ? "#00dd77" : "#ff4040";
+  const pts = snapshots.map(s => `${x(s.ts).toFixed(1)},${y(valFn(s)).toFixed(1)}`).join(" ");
+
+  const area = document.createElementNS(NS, "polygon");
+  area.setAttribute("points",
+    `${PAD_L},${y(yMin).toFixed(1)} ${pts} ${(W-PAD_R).toFixed(1)},${y(yMin).toFixed(1)}`);
+  area.setAttribute("fill", stroke);
+  area.setAttribute("fill-opacity", "0.08");
+  svg.appendChild(area);
+
+  const line = document.createElementNS(NS, "polyline");
+  line.setAttribute("points", pts);
+  line.setAttribute("fill", "none");
+  line.setAttribute("stroke", stroke);
+  line.setAttribute("stroke-width", "1.8");
+  svg.appendChild(line);
+
+  // Latest point dot
+  const last = snapshots[snapshots.length - 1];
+  const dot = document.createElementNS(NS, "circle");
+  dot.setAttribute("cx", x(last.ts));
+  dot.setAttribute("cy", y(valFn(last)));
+  dot.setAttribute("r", "5");
+  dot.setAttribute("fill", stroke);
+  svg.appendChild(dot);
+
+  // Hover tracking
+  const hover = document.createElementNS(NS, "rect");
+  hover.setAttribute("x", PAD_L); hover.setAttribute("y", PAD_T);
+  hover.setAttribute("width", innerW); hover.setAttribute("height", innerH);
+  hover.setAttribute("fill", "transparent");
+  hover.style.cursor = "crosshair";
+  svg.appendChild(hover);
+
+  hover.addEventListener("mousemove", evt => {
+    const rect = svg.getBoundingClientRect();
+    const px = evt.clientX - rect.left;
+    const tsAt = ts0 + ((px - PAD_L) / innerW) * tspan;
+    let nearest = snapshots[0], bestDiff = Infinity;
+    for (const s of snapshots) {
+      const d = Math.abs(s.ts - tsAt);
+      if (d < bestDiff) { bestDiff = d; nearest = s; }
+    }
+    const d = new Date(nearest.ts * 1000);
+    tip.innerHTML =
+      `<div style="color:rgba(221,212,184,0.55); font-size:9px;">${d.toLocaleString()}</div>` +
+      `<div>BAL: <span style="color:#ffc800">${nearest.balance_sol.toFixed(4)} SOL</span></div>` +
+      `<div>PNL: <span style="color:${nearest.pnl_pct>=0?'#00dd77':'#ff4040'}">${(nearest.pnl_pct>=0?'+':'')}${nearest.pnl_pct.toFixed(2)}%</span></div>` +
+      `<div>TRD: <span style="color:#ffc800">${nearest.closed_trades}</span></div>`;
+    tip.style.display = 'block';
+    const tipW = tip.offsetWidth || 180;
+    const tipH = tip.offsetHeight || 80;
+    let tx = px + 14; if (tx + tipW > W) tx = px - tipW - 14;
+    let ty = evt.clientY - rect.top - tipH - 8;
+    if (ty < 0) ty = evt.clientY - rect.top + 14;
+    tip.style.left = tx + 'px';
+    tip.style.top = ty + 'px';
+  });
+  hover.addEventListener("mouseleave", () => { tip.style.display = 'none'; });
+
+  // Footer timestamps
+  const fmtTs = ts => {
+    const d = new Date(ts * 1000);
+    return d.toLocaleDateString() + " " + d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});
+  };
+  document.getElementById('chartStart').textContent = fmtTs(snapshots[0].ts);
+  document.getElementById('chartLatest').textContent = fmtTs(last.ts);
+}
+
+loadData();
+window.addEventListener('resize', () => drawChart());
+</script>
 </body>
 </html>

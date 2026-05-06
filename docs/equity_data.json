@@ -1,0 +1,517 @@
+{
+  "snapshots": [
+    {
+      "ts": 1777928679,
+      "balance_sol": 1.116551,
+      "starting_sol": 1.116551,
+      "pnl_pct": 0.0,
+      "closed_trades": 0
+    },
+    {
+      "ts": 1777929199,
+      "balance_sol": 1.14826,
+      "starting_sol": 1.0,
+      "pnl_pct": -0.39,
+      "closed_trades": 5
+    },
+    {
+      "ts": 1777930862,
+      "balance_sol": 1.198624,
+      "starting_sol": 1.0,
+      "pnl_pct": -1.76,
+      "closed_trades": 24
+    },
+    {
+      "ts": 1777934198,
+      "balance_sol": 1.164888,
+      "starting_sol": 1.0,
+      "pnl_pct": -6.18,
+      "closed_trades": 38
+    },
+    {
+      "ts": 1777934258,
+      "balance_sol": 1.164888,
+      "starting_sol": 1.0,
+      "pnl_pct": -6.18,
+      "closed_trades": 38
+    },
+    {
+      "ts": 1777934290,
+      "balance_sol": 1.164888,
+      "starting_sol": 1.0,
+      "pnl_pct": -6.18,
+      "closed_trades": 38
+    },
+    {
+      "ts": 1777934345,
+      "balance_sol": 1.164888,
+      "starting_sol": 1.0,
+      "pnl_pct": -6.18,
+      "closed_trades": 38
+    },
+    {
+      "ts": 1777937615,
+      "balance_sol": 1.164888,
+      "starting_sol": 1.0,
+      "pnl_pct": -6.18,
+      "closed_trades": 38
+    },
+    {
+      "ts": 1777937798,
+      "balance_sol": 1.164888,
+      "starting_sol": 1.0,
+      "pnl_pct": -6.18,
+      "closed_trades": 38
+    },
+    {
+      "ts": 1777937858,
+      "balance_sol": 1.164888,
+      "starting_sol": 1.0,
+      "pnl_pct": -6.18,
+      "closed_trades": 38
+    },
+    {
+      "ts": 1777937890,
+      "balance_sol": 1.164888,
+      "starting_sol": 1.0,
+      "pnl_pct": -6.18,
+      "closed_trades": 38
+    },
+    {
+      "ts": 1777937945,
+      "balance_sol": 1.164888,
+      "starting_sol": 1.0,
+      "pnl_pct": -6.18,
+      "closed_trades": 38
+    },
+    {
+      "ts": 1777938826,
+      "balance_sol": 1.164888,
+      "starting_sol": 1.0,
+      "pnl_pct": -6.18,
+      "closed_trades": 38
+    },
+    {
+      "ts": 1777939170,
+      "balance_sol": 1.164888,
+      "starting_sol": 1.0,
+      "pnl_pct": -6.18,
+      "closed_trades": 38
+    },
+    {
+      "ts": 1777940159,
+      "balance_sol": 1.164888,
+      "starting_sol": 1.0,
+      "pnl_pct": -6.18,
+      "closed_trades": 38
+    },
+    {
+      "ts": 1777940919,
+      "balance_sol": 1.164888,
+      "starting_sol": 1.0,
+      "pnl_pct": -6.18,
+      "closed_trades": 38
+    },
+    {
+      "ts": 1777941847,
+      "balance_sol": 1.164888,
+      "starting_sol": 1.0,
+      "pnl_pct": -6.18,
+      "closed_trades": 38
+    },
+    {
+      "ts": 1777945385,
+      "balance_sol": 1.164888,
+      "starting_sol": 1.0,
+      "pnl_pct": -6.18,
+      "closed_trades": 38
+    },
+    {
+      "ts": 1777945532,
+      "balance_sol": 1.169748,
+      "starting_sol": 1.0,
+      "pnl_pct": -6.67,
+      "closed_trades": 50
+    },
+    {
+      "ts": 1777945970,
+      "balance_sol": 1.152503,
+      "starting_sol": 1.0,
+      "pnl_pct": -7.05,
+      "closed_trades": 53
+    },
+    {
+      "ts": 1777946418,
+      "balance_sol": 1.148698,
+      "starting_sol": 1.0,
+      "pnl_pct": -7.76,
+      "closed_trades": 58
+    },
+    {
+      "ts": 1777946811,
+      "balance_sol": 1.134514,
+      "starting_sol": 1.0,
+      "pnl_pct": -8.68,
+      "closed_trades": 62
+    },
+    {
+      "ts": 1777950411,
+      "balance_sol": 1.139364,
+      "starting_sol": 1.0,
+      "pnl_pct": -8.7,
+      "closed_trades": 63
+    },
+    {
+      "ts": 1777951960,
+      "balance_sol": 1.139364,
+      "starting_sol": 1.0,
+      "pnl_pct": -8.7,
+      "closed_trades": 63
+    },
+    {
+      "ts": 1777953055,
+      "balance_sol": 1.133991,
+      "starting_sol": 1.0,
+      "pnl_pct": -8.24,
+      "closed_trades": 81
+    },
+    {
+      "ts": 1777956655,
+      "balance_sol": 1.183426,
+      "starting_sol": 1.0,
+      "pnl_pct": -7.83,
+      "closed_trades": 99
+    },
+    {
+      "ts": 1777959849,
+      "balance_sol": 1.14812,
+      "starting_sol": 1.0,
+      "pnl_pct": -8.81,
+      "closed_trades": 117
+    },
+    {
+      "ts": 1777960325,
+      "balance_sol": 1.133987,
+      "starting_sol": 1.0,
+      "pnl_pct": -8.73,
+      "closed_trades": 119
+    },
+    {
+      "ts": 1777960927,
+      "balance_sol": 1.130436,
+      "starting_sol": 1.0,
+      "pnl_pct": -8.85,
+      "closed_trades": 123
+    },
+    {
+      "ts": 1777961419,
+      "balance_sol": 1.105542,
+      "starting_sol": 1.0,
+      "pnl_pct": -8.88,
+      "closed_trades": 125
+    },
+    {
+      "ts": 1777965019,
+      "balance_sol": 1.118595,
+      "starting_sol": 1.0,
+      "pnl_pct": -9.07,
+      "closed_trades": 130
+    },
+    {
+      "ts": 1777968619,
+      "balance_sol": 1.121649,
+      "starting_sol": 1.0,
+      "pnl_pct": -9.43,
+      "closed_trades": 150
+    },
+    {
+      "ts": 1777972219,
+      "balance_sol": 1.126757,
+      "starting_sol": 1.0,
+      "pnl_pct": -9.44,
+      "closed_trades": 162
+    },
+    {
+      "ts": 1777975819,
+      "balance_sol": 1.190335,
+      "starting_sol": 1.0,
+      "pnl_pct": -8.59,
+      "closed_trades": 199
+    },
+    {
+      "ts": 1777979419,
+      "balance_sol": 1.188319,
+      "starting_sol": 1.0,
+      "pnl_pct": -8.79,
+      "closed_trades": 202
+    },
+    {
+      "ts": 1777983019,
+      "balance_sol": 1.195113,
+      "starting_sol": 1.0,
+      "pnl_pct": -9.1,
+      "closed_trades": 208
+    },
+    {
+      "ts": 1777986235,
+      "balance_sol": 1.18832,
+      "starting_sol": 1.0,
+      "pnl_pct": -9.28,
+      "closed_trades": 211
+    },
+    {
+      "ts": 1777986818,
+      "balance_sol": 1.173485,
+      "starting_sol": 1.0,
+      "pnl_pct": -9.01,
+      "closed_trades": 220
+    },
+    {
+      "ts": 1777988367,
+      "balance_sol": 1.207895,
+      "starting_sol": 1.0,
+      "pnl_pct": -8.52,
+      "closed_trades": 245
+    },
+    {
+      "ts": 1777991967,
+      "balance_sol": 1.247159,
+      "starting_sol": 1.0,
+      "pnl_pct": -8.47,
+      "closed_trades": 259
+    },
+    {
+      "ts": 1777995567,
+      "balance_sol": 1.261478,
+      "starting_sol": 1.0,
+      "pnl_pct": -8.45,
+      "closed_trades": 284
+    },
+    {
+      "ts": 1777999167,
+      "balance_sol": 1.41564,
+      "starting_sol": 1.0,
+      "pnl_pct": -6.62,
+      "closed_trades": 315
+    },
+    {
+      "ts": 1778001601,
+      "balance_sol": 1.397643,
+      "starting_sol": 1.0,
+      "pnl_pct": -6.67,
+      "closed_trades": 324
+    },
+    {
+      "ts": 1778004030,
+      "balance_sol": 1.411067,
+      "starting_sol": 1.0,
+      "pnl_pct": -6.73,
+      "closed_trades": 345
+    },
+    {
+      "ts": 1778007630,
+      "balance_sol": 1.414261,
+      "starting_sol": 1.0,
+      "pnl_pct": -7.47,
+      "closed_trades": 354
+    },
+    {
+      "ts": 1778011230,
+      "balance_sol": 1.408716,
+      "starting_sol": 1.0,
+      "pnl_pct": -7.85,
+      "closed_trades": 366
+    },
+    {
+      "ts": 1778014830,
+      "balance_sol": 1.419868,
+      "starting_sol": 1.0,
+      "pnl_pct": -8.15,
+      "closed_trades": 381
+    },
+    {
+      "ts": 1778018430,
+      "balance_sol": 1.452729,
+      "starting_sol": 1.0,
+      "pnl_pct": -8.11,
+      "closed_trades": 409
+    },
+    {
+      "ts": 1778019281,
+      "balance_sol": 1.451549,
+      "starting_sol": 1.0,
+      "pnl_pct": -8.23,
+      "closed_trades": 413
+    },
+    {
+      "ts": 1778020652,
+      "balance_sol": 1.474382,
+      "starting_sol": 1.0,
+      "pnl_pct": -7.74,
+      "closed_trades": 431
+    },
+    {
+      "ts": 1778022035,
+      "balance_sol": 1.487817,
+      "starting_sol": 1.0,
+      "pnl_pct": -7.44,
+      "closed_trades": 449
+    },
+    {
+      "ts": 1778025635,
+      "balance_sol": 1.544043,
+      "starting_sol": 1.0,
+      "pnl_pct": -6.91,
+      "closed_trades": 484
+    },
+    {
+      "ts": 1778029236,
+      "balance_sol": 1.667145,
+      "starting_sol": 1.0,
+      "pnl_pct": -5.83,
+      "closed_trades": 538
+    },
+    {
+      "ts": 1778032836,
+      "balance_sol": 1.69071,
+      "starting_sol": 1.0,
+      "pnl_pct": -5.94,
+      "closed_trades": 569
+    },
+    {
+      "ts": 1778036436,
+      "balance_sol": 1.856364,
+      "starting_sol": 1.0,
+      "pnl_pct": -4.4,
+      "closed_trades": 595
+    },
+    {
+      "ts": 1778040036,
+      "balance_sol": 1.848903,
+      "starting_sol": 1.0,
+      "pnl_pct": -4.96,
+      "closed_trades": 611
+    },
+    {
+      "ts": 1778043522,
+      "balance_sol": 1.863575,
+      "starting_sol": 1.0,
+      "pnl_pct": -5.05,
+      "closed_trades": 642
+    },
+    {
+      "ts": 1778044464,
+      "balance_sol": 1.668821,
+      "starting_sol": 1.0,
+      "pnl_pct": 8.47,
+      "closed_trades": 654
+    },
+    {
+      "ts": 1778045836,
+      "balance_sol": 2.801303,
+      "starting_sol": 1.0,
+      "pnl_pct": 93.2,
+      "closed_trades": 672
+    },
+    {
+      "ts": 1778046179,
+      "balance_sol": 3.066078,
+      "starting_sol": 1.0,
+      "pnl_pct": 117.59,
+      "closed_trades": 676
+    },
+    {
+      "ts": 1778049779,
+      "balance_sol": 4.184595,
+      "starting_sol": 1.0,
+      "pnl_pct": 188.39,
+      "closed_trades": 714
+    },
+    {
+      "ts": 1778050256,
+      "balance_sol": 4.30684,
+      "starting_sol": 1.0,
+      "pnl_pct": 193.57,
+      "closed_trades": 720
+    },
+    {
+      "ts": 1778053856,
+      "balance_sol": 4.797043,
+      "starting_sol": 1.0,
+      "pnl_pct": 238.99,
+      "closed_trades": 766
+    },
+    {
+      "ts": 1778057456,
+      "balance_sol": 5.433738,
+      "starting_sol": 1.0,
+      "pnl_pct": 290.22,
+      "closed_trades": 818
+    },
+    {
+      "ts": 1778061056,
+      "balance_sol": 6.215863,
+      "starting_sol": 1.0,
+      "pnl_pct": 357.22,
+      "closed_trades": 868
+    },
+    {
+      "ts": 1778064656,
+      "balance_sol": 7.676785,
+      "starting_sol": 1.0,
+      "pnl_pct": 481.25,
+      "closed_trades": 933
+    },
+    {
+      "ts": 1778068256,
+      "balance_sol": 9.106311,
+      "starting_sol": 1.0,
+      "pnl_pct": 591.39,
+      "closed_trades": 1007
+    },
+    {
+      "ts": 1778071856,
+      "balance_sol": 12.58138,
+      "starting_sol": 1.0,
+      "pnl_pct": 836.6,
+      "closed_trades": 1092
+    },
+    {
+      "ts": 1778075456,
+      "balance_sol": 17.017994,
+      "starting_sol": 1.0,
+      "pnl_pct": 1190.34,
+      "closed_trades": 1211
+    },
+    {
+      "ts": 1778079056,
+      "balance_sol": 17.84592,
+      "starting_sol": 1.0,
+      "pnl_pct": 1283.39,
+      "closed_trades": 1316
+    },
+    {
+      "ts": 1778082656,
+      "balance_sol": 19.88842,
+      "starting_sol": 1.0,
+      "pnl_pct": 1432.81,
+      "closed_trades": 1415
+    },
+    {
+      "ts": 1778086256,
+      "balance_sol": 20.858461,
+      "starting_sol": 1.0,
+      "pnl_pct": 1523.99,
+      "closed_trades": 1493
+    },
+    {
+      "ts": 1778088348,
+      "balance_sol": 21.003558,
+      "starting_sol": 1.0,
+      "pnl_pct": 2000.36,
+      "closed_trades": 1532
+    }
+  ],
+  "generated_at": 1778088348,
+  "label": "Paper trading run \u00b7 1.0 SOL bankroll"
+}
