@@ -164,5 +164,8 @@ MIT — see LICENSE.
 
 ## Built by
 
-[Your Name] — solo project, ~5,000 lines of Python, July 2025 – May 2026.
+**Dennis Wells** ([@DeeKalshiWay](https://github.com/DeeKalshiWay)) — Las Vegas, NV.
+Solo project, ~5,000 lines of Python, designed and shipped in under a week.
 Every architectural decision documented in commit history and inline comments.
+
+Open to remote Solana / Python / Web3 backend roles. denniswells2019@gmail.com
