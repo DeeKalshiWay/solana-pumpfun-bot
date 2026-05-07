@@ -8,6 +8,7 @@ Upgraded with open-source alpha strategies:
 """
 
 import os
+
 from dotenv import load_dotenv
 
 load_dotenv(override=True)
@@ -88,11 +89,12 @@ CREATOR_DB_FILE          = "logs/creators.json"
 
 # ─── RISK MANAGEMENT ───────────────────────────────────────────────────────────
 # Tier 1 sizing: smaller positions, more concurrent trades = larger sample size
-# HIGH-RISK TIER — average trade ~3.33% of wallet (1.895 SOL ≈ $300).
-# Hot-streak trades can hit 6-8% of wallet on a single position.
-MAX_SOL_PER_TRADE      = 0.063    # ~3.33% of 1.895 SOL wallet (base trade)
-MAX_POSITION_PCT       = 0.35     # 35% of wallet hard cap on any single trade
-MAX_TOTAL_EXPOSURE_SOL = 0.40     # ~21% of wallet at risk simultaneously
+# MODERATE-RISK TIER — base trade ~4% of wallet (pulled back from 7%).
+# At 25 SOL wallet: base = 1.02 SOL, hot-streak ceiling = 2.55 SOL per trade.
+# These will be CAPS — if wallet grows, MAX_POSITION_PCT scales them dynamically.
+MAX_SOL_PER_TRADE      = 1.02     # ~4% of 25.36 SOL wallet
+MAX_POSITION_PCT       = 0.04     # 4% of wallet hard cap (per trade)
+MAX_TOTAL_EXPOSURE_SOL = 3.5      # ~14% of wallet at risk simultaneously
 MAX_OPEN_POSITIONS     = 5
 
 # Adaptive position sizing (Kelly lite):
