@@ -173,22 +173,56 @@ def _acquire_pid_lock():
             old_pid = None
 
         if old_pid and old_pid != os.getpid():
-            # Check if the old PID is still alive
+            # Check if the old PID is still alive AND is actually a pump_bot
+            # process. Without the second check, Windows PID recycling can
+            # make us think a Kalshi-bot python (or any other script) is
+            # "us" still running, and we refuse to start. That left the bot
+            # offline whenever a sibling project happened to grab the
+            # recycled PID. Tracked via the "kalshi blocks pump_bot" bug.
             alive = False
             try:
                 if os.name == "nt":
-                    # Windows: open handle to the process
                     import ctypes
                     PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
                     h = ctypes.windll.kernel32.OpenProcess(
                         PROCESS_QUERY_LIMITED_INFORMATION, False, old_pid
                     )
                     if h:
-                        # Check exit code: STILL_ACTIVE = 259
                         exit_code = ctypes.c_ulong(0)
                         ctypes.windll.kernel32.GetExitCodeProcess(h, ctypes.byref(exit_code))
                         ctypes.windll.kernel32.CloseHandle(h)
-                        alive = (exit_code.value == 259)
+                        # STILL_ACTIVE = 259. Process exists, but we still
+                        # need to confirm it's THIS bot.
+                        process_exists = (exit_code.value == 259)
+                    else:
+                        process_exists = False
+
+                    if process_exists:
+                        # Verify the process is actually pump_bot by inspecting
+                        # its command line. This is the bit the original code
+                        # was missing.
+                        try:
+                            import subprocess
+                            r = subprocess.run(
+                                ["powershell", "-NoProfile", "-Command",
+                                 f"(Get-CimInstance Win32_Process -Filter "
+                                 f"\"ProcessId={old_pid}\" "
+                                 f"-ErrorAction SilentlyContinue).CommandLine"],
+                                capture_output=True, text=True, timeout=5,
+                            )
+                            cmdline = (r.stdout or "").strip().lower()
+                            cwd = os.path.abspath(os.path.dirname(__file__)).lower()
+                            alive = (
+                                "main.py" in cmdline
+                                and (cwd in cmdline or "pump_bot" in cmdline)
+                            )
+                        except Exception:
+                            # If we can't verify, err on the side of taking
+                            # over — being wrong here means a brief two-bot
+                            # window, which the file locks below catch
+                            # anyway. Being wrong the other way means
+                            # the bot stays down forever.
+                            alive = False
                 else:
                     os.kill(old_pid, 0)
                     alive = True
@@ -197,12 +231,12 @@ def _acquire_pid_lock():
 
             if alive:
                 logger.critical(
-                    f"Another bot is already running (PID {old_pid}). "
+                    f"Another pump_bot is already running (PID {old_pid}). "
                     f"Refusing to start a duplicate. Exit 2."
                 )
                 sys.exit(2)
             else:
-                logger.warning(f"Stale PID lock from dead PID {old_pid}, taking over")
+                logger.warning(f"Stale PID lock from dead/foreign PID {old_pid}, taking over")
 
     # Write our PID
     with open(PID_LOCK_FILE, "w") as f:
