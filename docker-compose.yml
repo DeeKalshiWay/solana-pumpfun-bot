@@ -1,0 +1,28 @@
+services:
+  pump_bot:
+    build: .
+    image: pump_bot:latest
+    container_name: pump_bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - TZ=UTC
+    ports:
+      # Bind dashboard to localhost only by default. Put a reverse
+      # proxy (caddy/nginx) in front of this if you want public access.
+      - "127.0.0.1:8765:8765"
+    volumes:
+      - ./logs:/app/logs
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8765/api/status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 45s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    stop_grace_period: 30s

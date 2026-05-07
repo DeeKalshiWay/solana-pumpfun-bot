@@ -1,0 +1,40 @@
+[Unit]
+Description=pump_bot — Solana pump.fun trading bot (paper mode)
+Documentation=https://github.com/DeeKalshiWay/solana-pumpfun-bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pump
+Group=pump
+WorkingDirectory=/opt/pump_bot
+EnvironmentFile=/opt/pump_bot/.env
+ExecStart=/opt/pump_bot/venv/bin/python -u /opt/pump_bot/main.py
+
+Restart=always
+RestartSec=10
+StartLimitIntervalSec=300
+StartLimitBurst=20
+
+StandardOutput=append:/opt/pump_bot/logs/systemd.log
+StandardError=append:/opt/pump_bot/logs/systemd.log
+
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+ReadWritePaths=/opt/pump_bot/logs
+
+# Memory cap — kill+restart if it leaks past this
+MemoryMax=1G
+
+[Install]
+WantedBy=multi-user.target
