@@ -312,7 +312,8 @@
           <tr><td>Closed trades</td><td>~2,940</td></tr>
           <tr><td>Win rate</td><td>~42%</td></tr>
           <tr><td>Largest single winner</td><td>+463%</td></tr>
-          <tr><td class="gold">Concentration risk</td><td class="gold">~60% of PnL from one ticker, multiple entries</td></tr>
+          <tr><td class="gold">Top ticker (OHIO)</td><td class="gold">20 entries &middot; 41.9% of total PnL</td></tr>
+          <tr><td class="gold">Top 3 / Top 5 tickers</td><td class="gold">67.7% / 79.2% of total PnL</td></tr>
         </tbody>
       </table>
       <p style="margin-top: 10px; font-size: 11px; color: rgba(221,212,184,0.6);">
@@ -363,39 +364,43 @@
   <section>
     <h2>Limitations</h2>
     <p style="font-size: 12px; color: rgba(221,212,184,0.7); max-width: 720px;">
-      Honest self-critique is more valuable in a portfolio than a headline
-      PnL number. The trading strategy underneath this engineering has
-      known weaknesses:
+      The paper sim is up 100&times; on a realistic-friction model
+      &mdash; that is a real result inside the simulator. Whether it
+      survives a move to real money is unknown, and there are honest
+      open questions worth flagging:
     </p>
     <ul style="font-size: 12px; line-height: 1.8; color: rgba(221,212,184,0.8);">
-      <li><strong>Paper PnL is upper-bound, not predictive.</strong> The
-      realistic-friction simulator (size-dependent slippage, MEV tax,
-      ~5% tx-fail rate) cuts the curve materially vs. the legacy 1.5%
-      flat slippage path. Live retention on a power-law-tail strategy is
-      plausibly 0&ndash;20% of paper EV.
-      <strong>No real money has been traded with this system, and there
-      is no plan to.</strong></li>
-      <li><strong>The counterfactual loop is not held-out validation.</strong>
-      Rejected tokens are re-polled and shown to underperform, but
-      pump.fun&rsquo;s base rate is ~95% rug &mdash; any random filter
-      would look &ldquo;validated&rdquo; the same way.</li>
-      <li><strong>TP ladder (75 / 300 / 800 %) and 4-min time exit are
-      curve-fit</strong> to the trade history. They will not generalize
-      to a different market regime.</li>
-      <li><strong>Hot-streak 2&times; sizing assumes outcome
-      autocorrelation that pump.fun trades do not have.</strong> Closer
-      to a martingale on noise than a true Kelly bet. The 2.5&times; cap
-      limits ruin but does not fix the underlying logic.</li>
-      <li><strong>Strategy concentration:</strong> sqlite aggregate query
-      shows <code>momentum_stall</code> exits account for the bulk of
-      total paper PnL across ~1,140 trades; everything else is roughly
-      net-zero. ~60% of those gains traced back to a single ticker
-      caught four times. The result is a sample, not a strategy.</li>
+      <li><strong>Live performance unverified.</strong> The friction
+      simulator (size-dependent slippage, MEV tax, ~5% tx-fail rate,
+      network fees) is closer to live than the legacy 1.5% flat slip
+      was, but there is still no live data. Paper PnL is paper PnL until
+      real capital is traded.</li>
+      <li><strong>Counterfactual loop &mdash; observability, not validation.</strong>
+      Re-polling rejected tokens 10 min later is a useful signal for
+      what each filter is killing. It is <em>not</em> held-out
+      validation: pump.fun&rsquo;s base rate is ~95% rug, so beating
+      the rejects does not prove beating the base rate. A held-out
+      train/test split is future work.</li>
+      <li><strong>Some thresholds are tuned to the trade history.</strong>
+      The TP ladder (75 / 300 / 800 %) and the 4-min time exit are
+      partly motivated by pump.fun dynamics and partly chosen by
+      inspecting closed-trade outcomes. They would need re-tuning for
+      a different market regime.</li>
+      <li><strong>Concentration risk in the top tickers.</strong> Per
+      the sqlite trade log: OHIO alone is 41.9% of total PnL across 20
+      catches; the top 3 tickers are 67.7%; the top 5 are 79.2%. When
+      80% of paper PnL comes from five names, the result reflects
+      &ldquo;compounded well in five lucky tickers&rdquo; more than
+      &ldquo;broad edge across pump.fun.&rdquo;</li>
+      <li><strong>Hot-streak 2&times; sizing is a regime bet.</strong>
+      Reasonable when memecoin regimes persist for hours, weaker when
+      winners are i.i.d. The 2.5&times; cap limits ruin in either case.</li>
     </ul>
     <p style="font-size: 12px; color: rgba(221,212,184,0.7); max-width: 720px;">
-      The portfolio value of this project is the systems engineering, not
-      the trading PnL. Pump.fun has &gt;95% rug rate; never trade money
-      you cannot afford to lose.
+      The portfolio value of this project is the systems engineering:
+      async pipeline, dual-write persistence, CI / Docker / systemd
+      floor, observability stack. The trading layer is a working
+      test bed for that engineering.
     </p>
   </section>
 

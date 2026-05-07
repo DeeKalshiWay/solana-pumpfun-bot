@@ -118,37 +118,51 @@ connections (3 → 1 WS reduces rate-limit risk).
 
 ## Limitations
 
-I'm including this section because honest self-critique is more
-valuable in a portfolio than a headline PnL number. The trading
-strategy underneath this engineering has known weaknesses:
+The paper sim is up 100&times; on a realistic-friction model &mdash;
+that is a real result inside the simulator. Whether it survives a
+move to real money is unknown, and there are honest open questions
+worth flagging:
 
-- **Paper PnL is upper-bound, not predictive.** The realistic-friction
-  simulator (size-dependent slippage, MEV tax, ~5% tx-fail rate,
-  network fees) cuts the curve meaningfully vs. the legacy 1.5% flat
-  slippage path. Live retention on a power-law-tail strategy is
-  plausibly 0–20% of paper EV. **No real money has been traded with
-  this system, and there is currently no plan to.**
-- **The counterfactual loop is not held-out validation.** Rejected
-  tokens are re-polled and shown to underperform, but pump.fun's base
-  rate is ~95% rug — any random filter would look "validated" the
-  same way. The methodologically correct version splits train/test
-  data and checks whether rejects underperform the *base rate* on a
-  held-out set. Tracked in
-  [issue #TODO](https://github.com/DeeKalshiWay/solana-pumpfun-bot/issues).
-- **TP ladder (75 / 300 / 800 %) and 4-min time exit are curve-fit.**
-  Thresholds were chosen by inspecting the trade history; they will
-  not generalize to a different market regime. ~60 % of total paper
-  gains came from a single ticker caught four times by the
-  momentum-stall exit — that is a sample, not a strategy.
-- **Hot-streak 2× sizing assumes outcome autocorrelation that
-  pump.fun trades do not have.** It is closer to a martingale on
-  noise than a true Kelly bet. The 2.5× hard cap limits ruin but does
-  not fix the underlying logic.
-- **The strategy is, distilled, "buy newly-launched memecoins on a
-  momentum signal, size up after wins, hope a few moonshot."** On a
-  market where >95 % of tokens go to zero, this is a known
-  -EV game once real costs land. The portfolio value of this project
-  is the systems engineering, not the trading PnL.
+- **Live performance unverified.** The realistic-friction simulator
+  models size-dependent slippage, MEV tax, ~5% tx-fail rate, and
+  network fees, so it is closer to live than the legacy 1.5% flat
+  slippage path was. But there is still no live data. Until real
+  capital is traded, paper PnL is paper PnL.
+- **Counterfactual loop &mdash; observability, not validation.**
+  Re-polling rejected tokens 10 min later is a useful signal for
+  "what is each filter killing." It is *not* held-out validation:
+  pump.fun's base rate is ~95 % rug, so a filter beating its rejects
+  does not prove it beats the base rate. A held-out test split
+  remains future work; for now treat the LEARN tab as observability,
+  not proof.
+- **Some thresholds are tuned to the trade history.** The TP ladder
+  (75 / 300 / 800 %) and the 4-min time exit are partly motivated by
+  pump.fun dynamics and partly chosen by inspecting closed-trade
+  outcomes. They will need re-tuning for any market regime that does
+  not look like the current one.
+- **Concentration risk in the top tickers.** Querying the sqlite
+  trade log:
+  ```
+  OHIO     20 trades   33.36 SOL   41.9 % of total PnL
+  USTRL     5 trades   10.28 SOL   12.9 %
+  USDJT     4 trades   10.18 SOL   12.8 %
+                                  ─────
+  Top 3 tickers                   67.7 %
+  Top 5 tickers                   79.2 %
+  ```
+  When 80 % of paper PnL comes from five tickers, the result is
+  closer to "the system was good at compounding in five lucky names"
+  than "the system has broad edge across pump.fun." That should be
+  reflected in any expectation of out-of-sample performance.
+- **Hot-streak 2&times; sizing is a regime bet.** It assumes recent
+  win rate carries forward &mdash; reasonable when memecoin regimes
+  persist for hours, weaker when winners are i.i.d. The 2.5&times;
+  hard cap limits ruin in either case.
+
+The portfolio value of this project is the systems engineering: the
+async pipeline, the dual-write persistence, the CI/Docker/systemd
+floor, the observability stack. The trading layer is a working
+test bed for that engineering, not a verified profitable strategy.
 
 ## Numbers
 
