@@ -617,12 +617,75 @@
       "closed_trades": 2367
     },
     {
-      "ts": 1778130210,
-      "balance_sol": 62.889319,
+      "ts": 1778131571,
+      "balance_sol": 62.263489,
       "starting_sol": 1.0,
-      "pnl_pct": 6188.93,
-      "closed_trades": 2370
+      "pnl_pct": 6048.72,
+      "closed_trades": 2373
+    },
+    {
+      "ts": 1778135171,
+      "balance_sol": 62.976873,
+      "starting_sol": 1.0,
+      "pnl_pct": 6293.06,
+      "closed_trades": 2408
+    },
+    {
+      "ts": 1778138771,
+      "balance_sol": 79.118617,
+      "starting_sol": 1.0,
+      "pnl_pct": 6954.41,
+      "closed_trades": 2492
+    },
+    {
+      "ts": 1778142372,
+      "balance_sol": 74.949953,
+      "starting_sol": 1.0,
+      "pnl_pct": 6477.37,
+      "closed_trades": 2540
+    },
+    {
+      "ts": 1778145972,
+      "balance_sol": 79.931125,
+      "starting_sol": 1.0,
+      "pnl_pct": 6667.19,
+      "closed_trades": 2590
+    },
+    {
+      "ts": 1778149572,
+      "balance_sol": 89.946549,
+      "starting_sol": 1.0,
+      "pnl_pct": 7197.14,
+      "closed_trades": 2635
+    },
+    {
+      "ts": 1778153172,
+      "balance_sol": 98.875211,
+      "starting_sol": 1.0,
+      "pnl_pct": 7810.1,
+      "closed_trades": 2689
+    },
+    {
+      "ts": 1778156772,
+      "balance_sol": 101.567182,
+      "starting_sol": 1.0,
+      "pnl_pct": 7813.76,
+      "closed_trades": 2750
+    },
+    {
+      "ts": 1778160372,
+      "balance_sol": 101.313125,
+      "starting_sol": 1.0,
+      "pnl_pct": 7765.77,
+      "closed_trades": 2803
+    },
+    {
+      "ts": 1778163972,
+      "balance_sol": 103.790553,
+      "starting_sol": 1.0,
+      "pnl_pct": 7796.35,
+      "closed_trades": 2889
     }
   ],
-  "generated_at": 1778130210
+  "generated_at": 1778168483
 }

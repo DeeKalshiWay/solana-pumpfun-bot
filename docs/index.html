@@ -418,9 +418,12 @@
 </div>
 
 <script>
-// ── Equity chart — static snapshot baked into the portfolio page ─────────────
+// ── Equity chart — fetched live from equity_data.json on the deployed
+//     site, with an inlined fallback so the page also works opened
+//     locally (file://) or in environments that don't serve sibling files.
+const __INLINE_DATA__ = {"snapshots":[{"ts":1777928679,"balance_sol":1.116551,"starting_sol":1.116551,"pnl_pct":0.0,"closed_trades":0},{"ts":1777929199,"balance_sol":1.14826,"starting_sol":1.0,"pnl_pct":-0.39,"closed_trades":5},{"ts":1777930862,"balance_sol":1.198624,"starting_sol":1.0,"pnl_pct":-1.76,"closed_trades":24},{"ts":1777934198,"balance_sol":1.164888,"starting_sol":1.0,"pnl_pct":-6.18,"closed_trades":38},{"ts":1777934258,"balance_sol":1.164888,"starting_sol":1.0,"pnl_pct":-6.18,"closed_trades":38},{"ts":1777934290,"balance_sol":1.164888,"starting_sol":1.0,"pnl_pct":-6.18,"closed_trades":38},{"ts":1777934345,"balance_sol":1.164888,"starting_sol":1.0,"pnl_pct":-6.18,"closed_trades":38},{"ts":1777937615,"balance_sol":1.164888,"starting_sol":1.0,"pnl_pct":-6.18,"closed_trades":38},{"ts":1777937798,"balance_sol":1.164888,"starting_sol":1.0,"pnl_pct":-6.18,"closed_trades":38},{"ts":1777937858,"balance_sol":1.164888,"starting_sol":1.0,"pnl_pct":-6.18,"closed_trades":38},{"ts":1777937890,"balance_sol":1.164888,"starting_sol":1.0,"pnl_pct":-6.18,"closed_trades":38},{"ts":1777937945,"balance_sol":1.164888,"starting_sol":1.0,"pnl_pct":-6.18,"closed_trades":38},{"ts":1777938826,"balance_sol":1.164888,"starting_sol":1.0,"pnl_pct":-6.18,"closed_trades":38},{"ts":1777939170,"balance_sol":1.164888,"starting_sol":1.0,"pnl_pct":-6.18,"closed_trades":38},{"ts":1777940159,"balance_sol":1.164888,"starting_sol":1.0,"pnl_pct":-6.18,"closed_trades":38},{"ts":1777940919,"balance_sol":1.164888,"starting_sol":1.0,"pnl_pct":-6.18,"closed_trades":38},{"ts":1777941847,"balance_sol":1.164888,"starting_sol":1.0,"pnl_pct":-6.18,"closed_trades":38},{"ts":1777945385,"balance_sol":1.164888,"starting_sol":1.0,"pnl_pct":-6.18,"closed_trades":38},{"ts":1777945532,"balance_sol":1.169748,"starting_sol":1.0,"pnl_pct":-6.67,"closed_trades":50},{"ts":1777945970,"balance_sol":1.152503,"starting_sol":1.0,"pnl_pct":-7.05,"closed_trades":53},{"ts":1777946418,"balance_sol":1.148698,"starting_sol":1.0,"pnl_pct":-7.76,"closed_trades":58},{"ts":1777946811,"balance_sol":1.134514,"starting_sol":1.0,"pnl_pct":-8.68,"closed_trades":62},{"ts":1777950411,"balance_sol":1.139364,"starting_sol":1.0,"pnl_pct":-8.7,"closed_trades":63},{"ts":1777951960,"balance_sol":1.139364,"starting_sol":1.0,"pnl_pct":-8.7,"closed_trades":63},{"ts":1777953055,"balance_sol":1.133991,"starting_sol":1.0,"pnl_pct":-8.24,"closed_trades":81},{"ts":1777956655,"balance_sol":1.183426,"starting_sol":1.0,"pnl_pct":-7.83,"closed_trades":99},{"ts":1777959849,"balance_sol":1.14812,"starting_sol":1.0,"pnl_pct":-8.81,"closed_trades":117},{"ts":1777960325,"balance_sol":1.133987,"starting_sol":1.0,"pnl_pct":-8.73,"closed_trades":119},{"ts":1777960927,"balance_sol":1.130436,"starting_sol":1.0,"pnl_pct":-8.85,"closed_trades":123},{"ts":1777961419,"balance_sol":1.105542,"starting_sol":1.0,"pnl_pct":-8.88,"closed_trades":125},{"ts":1777965019,"balance_sol":1.118595,"starting_sol":1.0,"pnl_pct":-9.07,"closed_trades":130},{"ts":1777968619,"balance_sol":1.121649,"starting_sol":1.0,"pnl_pct":-9.43,"closed_trades":150},{"ts":1777972219,"balance_sol":1.126757,"starting_sol":1.0,"pnl_pct":-9.44,"closed_trades":162},{"ts":1777975819,"balance_sol":1.190335,"starting_sol":1.0,"pnl_pct":-8.59,"closed_trades":199},{"ts":1777979419,"balance_sol":1.188319,"starting_sol":1.0,"pnl_pct":-8.79,"closed_trades":202},{"ts":1777983019,"balance_sol":1.195113,"starting_sol":1.0,"pnl_pct":-9.1,"closed_trades":208},{"ts":1777986235,"balance_sol":1.18832,"starting_sol":1.0,"pnl_pct":-9.28,"closed_trades":211},{"ts":1777986818,"balance_sol":1.173485,"starting_sol":1.0,"pnl_pct":-9.01,"closed_trades":220},{"ts":1777988367,"balance_sol":1.207895,"starting_sol":1.0,"pnl_pct":-8.52,"closed_trades":245},{"ts":1777991967,"balance_sol":1.247159,"starting_sol":1.0,"pnl_pct":-8.47,"closed_trades":259},{"ts":1777995567,"balance_sol":1.261478,"starting_sol":1.0,"pnl_pct":-8.45,"closed_trades":284},{"ts":1777999167,"balance_sol":1.41564,"starting_sol":1.0,"pnl_pct":-6.62,"closed_trades":315},{"ts":1778001601,"balance_sol":1.397643,"starting_sol":1.0,"pnl_pct":-6.67,"closed_trades":324},{"ts":1778004030,"balance_sol":1.411067,"starting_sol":1.0,"pnl_pct":-6.73,"closed_trades":345},{"ts":1778007630,"balance_sol":1.414261,"starting_sol":1.0,"pnl_pct":-7.47,"closed_trades":354},{"ts":1778011230,"balance_sol":1.408716,"starting_sol":1.0,"pnl_pct":-7.85,"closed_trades":366},{"ts":1778014830,"balance_sol":1.419868,"starting_sol":1.0,"pnl_pct":-8.15,"closed_trades":381},{"ts":1778018430,"balance_sol":1.452729,"starting_sol":1.0,"pnl_pct":-8.11,"closed_trades":409},{"ts":1778019281,"balance_sol":1.451549,"starting_sol":1.0,"pnl_pct":-8.23,"closed_trades":413},{"ts":1778020652,"balance_sol":1.474382,"starting_sol":1.0,"pnl_pct":-7.74,"closed_trades":431},{"ts":1778022035,"balance_sol":1.487817,"starting_sol":1.0,"pnl_pct":-7.44,"closed_trades":449},{"ts":1778025635,"balance_sol":1.544043,"starting_sol":1.0,"pnl_pct":-6.91,"closed_trades":484},{"ts":1778029236,"balance_sol":1.667145,"starting_sol":1.0,"pnl_pct":-5.83,"closed_trades":538},{"ts":1778032836,"balance_sol":1.69071,"starting_sol":1.0,"pnl_pct":-5.94,"closed_trades":569},{"ts":1778036436,"balance_sol":1.856364,"starting_sol":1.0,"pnl_pct":-4.4,"closed_trades":595},{"ts":1778040036,"balance_sol":1.848903,"starting_sol":1.0,"pnl_pct":-4.96,"closed_trades":611},{"ts":1778043522,"balance_sol":1.863575,"starting_sol":1.0,"pnl_pct":-5.05,"closed_trades":642},{"ts":1778044464,"balance_sol":1.668821,"starting_sol":1.0,"pnl_pct":8.47,"closed_trades":654},{"ts":1778045836,"balance_sol":2.801303,"starting_sol":1.0,"pnl_pct":93.2,"closed_trades":672},{"ts":1778046179,"balance_sol":3.066078,"starting_sol":1.0,"pnl_pct":117.59,"closed_trades":676},{"ts":1778049779,"balance_sol":4.184595,"starting_sol":1.0,"pnl_pct":188.39,"closed_trades":714},{"ts":1778050256,"balance_sol":4.30684,"starting_sol":1.0,"pnl_pct":193.57,"closed_trades":720},{"ts":1778053856,"balance_sol":4.797043,"starting_sol":1.0,"pnl_pct":238.99,"closed_trades":766},{"ts":1778057456,"balance_sol":5.433738,"starting_sol":1.0,"pnl_pct":290.22,"closed_trades":818},{"ts":1778061056,"balance_sol":6.215863,"starting_sol":1.0,"pnl_pct":357.22,"closed_trades":868},{"ts":1778064656,"balance_sol":7.676785,"starting_sol":1.0,"pnl_pct":481.25,"closed_trades":933},{"ts":1778068256,"balance_sol":9.106311,"starting_sol":1.0,"pnl_pct":591.39,"closed_trades":1007},{"ts":1778071856,"balance_sol":12.58138,"starting_sol":1.0,"pnl_pct":836.6,"closed_trades":1092},{"ts":1778075456,"balance_sol":17.017994,"starting_sol":1.0,"pnl_pct":1190.34,"closed_trades":1211},{"ts":1778079056,"balance_sol":17.84592,"starting_sol":1.0,"pnl_pct":1283.39,"closed_trades":1316},{"ts":1778082656,"balance_sol":19.88842,"starting_sol":1.0,"pnl_pct":1432.81,"closed_trades":1415},{"ts":1778086256,"balance_sol":20.858461,"starting_sol":1.0,"pnl_pct":1523.99,"closed_trades":1493},{"ts":1778089261,"balance_sol":21.055462,"starting_sol":1.0,"pnl_pct":1549.99,"closed_trades":1541},{"ts":1778092861,"balance_sol":22.162464,"starting_sol":1.0,"pnl_pct":1622.61,"closed_trades":1642},{"ts":1778096461,"balance_sol":23.091466,"starting_sol":1.0,"pnl_pct":1695.01,"closed_trades":1729},{"ts":1778100061,"balance_sol":24.937389,"starting_sol":1.0,"pnl_pct":1800.24,"closed_trades":1825},{"ts":1778103661,"balance_sol":25.18348,"starting_sol":1.0,"pnl_pct":1848.32,"closed_trades":1884},{"ts":1778107363,"balance_sol":19.91905,"starting_sol":1.0,"pnl_pct":1900.68,"closed_trades":1931},{"ts":1778110963,"balance_sol":60.492275,"starting_sol":1.0,"pnl_pct":5210.18,"closed_trades":2013},{"ts":1778114356,"balance_sol":71.571736,"starting_sol":1.0,"pnl_pct":6558.9,"closed_trades":2088},{"ts":1778117341,"balance_sol":84.634394,"starting_sol":1.0,"pnl_pct":6892.41,"closed_trades":2152},{"ts":1778120941,"balance_sol":86.10305,"starting_sol":1.0,"pnl_pct":6681.4,"closed_trades":2227},{"ts":1778124541,"balance_sol":76.838698,"starting_sol":1.0,"pnl_pct":5734.49,"closed_trades":2308},{"ts":1778125429,"balance_sol":70.76993,"starting_sol":1.0,"pnl_pct":5791.66,"closed_trades":2319},{"ts":1778127314,"balance_sol":73.216935,"starting_sol":1.0,"pnl_pct":6148.92,"closed_trades":2347},{"ts":1778127813,"balance_sol":68.590946,"starting_sol":1.0,"pnl_pct":6384.76,"closed_trades":2351},{"ts":1778128210,"balance_sol":64.866923,"starting_sol":1.0,"pnl_pct":6166.49,"closed_trades":2357},{"ts":1778129136,"balance_sol":64.176449,"starting_sol":1.0,"pnl_pct":5920.97,"closed_trades":2367},{"ts":1778131571,"balance_sol":62.263489,"starting_sol":1.0,"pnl_pct":6048.72,"closed_trades":2373},{"ts":1778135171,"balance_sol":62.976873,"starting_sol":1.0,"pnl_pct":6293.06,"closed_trades":2408},{"ts":1778138771,"balance_sol":79.118617,"starting_sol":1.0,"pnl_pct":6954.41,"closed_trades":2492},{"ts":1778142372,"balance_sol":74.949953,"starting_sol":1.0,"pnl_pct":6477.37,"closed_trades":2540},{"ts":1778145972,"balance_sol":79.931125,"starting_sol":1.0,"pnl_pct":6667.19,"closed_trades":2590},{"ts":1778149572,"balance_sol":89.946549,"starting_sol":1.0,"pnl_pct":7197.14,"closed_trades":2635},{"ts":1778153172,"balance_sol":98.875211,"starting_sol":1.0,"pnl_pct":7810.1,"closed_trades":2689},{"ts":1778156772,"balance_sol":101.567182,"starting_sol":1.0,"pnl_pct":7813.76,"closed_trades":2750},{"ts":1778160372,"balance_sol":101.313125,"starting_sol":1.0,"pnl_pct":7765.77,"closed_trades":2803},{"ts":1778163972,"balance_sol":103.790553,"starting_sol":1.0,"pnl_pct":7796.35,"closed_trades":2889}],"generated_at":1778168483};
 let chartMode = 'sol';
-let snapshots = [];
+let snapshots = __INLINE_DATA__.snapshots || [];
 const NS = "http://www.w3.org/2000/svg";
 
 document.querySelectorAll('.chart-tog').forEach(btn => {
@@ -433,15 +436,19 @@ document.querySelectorAll('.chart-tog').forEach(btn => {
 });
 
 async function loadData() {
+  // Render whatever we already have inlined — never start blank.
+  drawChart();
+  updateLiveBadge(__INLINE_DATA__.generated_at);
   try {
     // Cache-bust on every fetch so we always get the freshest pushed snapshot.
     const r = await fetch('equity_data.json?t=' + Date.now(), { cache: 'no-store' });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
     const d = await r.json();
-    snapshots = d.snapshots || [];
+    snapshots = d.snapshots || snapshots;
     drawChart();
     updateLiveBadge(d.generated_at);
   } catch (e) {
-    console.error('Could not load equity data', e);
+    console.warn('Live equity_data.json unavailable; using inlined snapshot:', e.message);
   }
 }
 
@@ -463,6 +470,14 @@ function drawChart() {
   const svg = document.getElementById('equityChart');
   const tip = document.getElementById('chartTooltip');
   if (!svg || snapshots.length < 2) return;
+  // SVG may not have been laid out yet — retry once the browser has
+  // measured it. Without this, an early synchronous call (before fetch
+  // returns) sees clientWidth=0 and the polyline renders into negative
+  // space, leaving the chart visually empty.
+  if (!svg.clientWidth) {
+    requestAnimationFrame(drawChart);
+    return;
+  }
   while (svg.firstChild) svg.removeChild(svg.firstChild);
 
   const W = svg.clientWidth || 800;
@@ -477,9 +492,12 @@ function drawChart() {
   const fmtFn = chartMode === 'pnl'    ? (v => (v >= 0 ? '+' : '') + v.toFixed(0) + '%')
               : chartMode === 'trades' ? (v => Math.round(v).toString())
               :                           (v => v.toFixed(2) + ' SOL');
+  // Use the latest snapshot's starting_sol — early snapshots had a
+  // stale seed value (~1.12) before the canonical 1.0 was persisted.
+  const lastStartSol = snapshots[snapshots.length - 1].starting_sol || 1;
   const refVal = chartMode === 'pnl'    ? 0
                : chartMode === 'trades' ? null
-               :                           (snapshots[0].starting_sol || 1);
+               :                           lastStartSol;
 
   const ts0 = snapshots[0].ts, tsN = snapshots[snapshots.length-1].ts;
   const tspan = (tsN - ts0) || 1;
@@ -489,7 +507,11 @@ function drawChart() {
   const maxV = Math.max(...values, refVal != null ? refVal : -Infinity);
   const range = (maxV - minV) || 1;
   const pad = range * 0.1;
-  const yMin = minV - pad, yMax = maxV + pad;
+  // SOL and trade-count are non-negative; clamp the axis floor at 0
+  // so a 10% pad doesn't push the bottom label into negative territory.
+  const yFloor = chartMode === 'pnl' ? -Infinity : 0;
+  const yMin = Math.max(yFloor, minV - pad);
+  const yMax = maxV + pad;
 
   const x = ts => PAD_L + ((ts - ts0) / tspan) * innerW;
   const y = v  => PAD_T + (1 - (v - yMin) / (yMax - yMin)) * innerH;
