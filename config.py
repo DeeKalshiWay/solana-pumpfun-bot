@@ -1,17 +1,61 @@
 """
 config.py — Pump Bot configuration.
-Upgraded with open-source alpha strategies:
-  - Creator tracking (Dexter approach, 35-45% win rate)
-  - Bonding curve progress filtering (eliminates 95% of rugs)
-  - Velocity-based scoring (40-60% better graduation odds)
-  - Tighter risk management (-10% stop loss, 25/50% take-profits)
+
+Two layers:
+  - In-code constants below = CONSERVATIVE STARTER defaults. Anyone
+    who clones the repo can run the bot safely with these.
+  - Anything wrapped in `_env_*("NAME", default)` reads from the local
+    `.env` file (gitignored). The operator's tuned values live there.
+
+This split exists so the public repo demonstrates the *machinery*
+without leaking the *exact tuned numbers* that the operator uses
+when actually running. Changing a tuned value = edit `.env`, no
+git commit needed.
 """
 
+import json
 import os
 
 from dotenv import load_dotenv
 
 load_dotenv(override=True)
+
+
+def _env_float(name: str, default: float) -> float:
+    v = os.getenv(name)
+    if v is None or v == "":
+        return default
+    try:
+        return float(v)
+    except ValueError:
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    v = os.getenv(name)
+    if v is None or v == "":
+        return default
+    try:
+        return int(v)
+    except ValueError:
+        return default
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    v = os.getenv(name)
+    if v is None or v == "":
+        return default
+    return v.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _env_json(name: str, default):
+    v = os.getenv(name)
+    if not v:
+        return default
+    try:
+        return json.loads(v)
+    except (json.JSONDecodeError, ValueError):
+        return default
 
 # ─── PAPER TRADING ─────────────────────────────────────────────────────────────
 PAPER_TRADING       = True    # Set False to trade with real money
@@ -71,92 +115,75 @@ NAME_BLACKLIST_SUBSTRINGS = [
 ]
 
 # ─── SCORING THRESHOLDS ────────────────────────────────────────────────────────
-MIN_BUY_SCORE = 42              # Tier 1: lowered for 5x more data per day in paper
+# Defaults are CONSERVATIVE STARTER values — operator's tuned values live
+# in `.env` (gitignored). See `.env.example` for the full list.
+MIN_BUY_SCORE         = _env_int("MIN_BUY_SCORE",         60)
+MIN_BONDING_CURVE_PCT = _env_float("MIN_BONDING_CURVE_PCT", 30.0)
+MAX_BONDING_CURVE_PCT = _env_float("MAX_BONDING_CURVE_PCT", 80.0)
+BUY_COOLDOWN_SECONDS  = _env_int("BUY_COOLDOWN_SECONDS",  15)
 
-# Bonding curve progress filter (open-source research: 30%+ eliminates 95% of rugs)
-# Set 0 for fresh token sniping (max speed), or 30 for safer entries
-MIN_BONDING_CURVE_PCT = 0.0
-MAX_BONDING_CURVE_PCT = 80.0    # Never buy within 20% of migration (~85 SOL)
-
-# Buy cooldown after detection (0 = instant, 15 = safer mode from Chainstack research)
-BUY_COOLDOWN_SECONDS = 0
-
-# ─── CREATOR TRACKING (Dexter strategy — best documented win-rate booster) ────
-CREATOR_TRACKING_ENABLED = True
-CREATOR_TOP_N            = 50   # Only auto-boost tokens from top N creators
-CREATOR_MIN_LAUNCHES     = 2    # Creator needs 2+ launches to appear in tracker
+# ─── CREATOR TRACKING (Dexter strategy) ───────────────────────────────────────
+CREATOR_TRACKING_ENABLED = _env_bool("CREATOR_TRACKING_ENABLED", True)
+CREATOR_TOP_N            = _env_int("CREATOR_TOP_N",            50)
+CREATOR_MIN_LAUNCHES     = _env_int("CREATOR_MIN_LAUNCHES",      2)
 CREATOR_DB_FILE          = "logs/creators.json"
 
 # ─── RISK MANAGEMENT ───────────────────────────────────────────────────────────
-# Tier 1 sizing: smaller positions, more concurrent trades = larger sample size
-# MODERATE-RISK TIER — base trade ~4% of wallet (pulled back from 7%).
-# At 25 SOL wallet: base = 1.02 SOL, hot-streak ceiling = 2.55 SOL per trade.
-# These will be CAPS — if wallet grows, MAX_POSITION_PCT scales them dynamically.
-MAX_SOL_PER_TRADE      = 1.02     # ~4% of 25.36 SOL wallet
-MAX_POSITION_PCT       = 0.04     # 4% of wallet hard cap (per trade)
-MAX_TOTAL_EXPOSURE_SOL = 3.5      # ~14% of wallet at risk simultaneously
-MAX_OPEN_POSITIONS     = 5
+# Defaults below assume a small starter wallet (~1 SOL) and bias toward safety.
+# Operators with tuned values override via `.env`.
+MAX_SOL_PER_TRADE      = _env_float("MAX_SOL_PER_TRADE",      0.05)
+MAX_POSITION_PCT       = _env_float("MAX_POSITION_PCT",       0.05)
+MAX_TOTAL_EXPOSURE_SOL = _env_float("MAX_TOTAL_EXPOSURE_SOL", 0.50)
+MAX_OPEN_POSITIONS     = _env_int("MAX_OPEN_POSITIONS",         3)
 
 # Adaptive position sizing (Kelly lite):
 # Looks at win rate of last N closed trades and scales position size.
-# Hot streak = bet bigger (ride momentum). Cold streak = bet smaller
-# (don't dig deeper). Score-based sizing was disabled because data shows
-# scores above 42 don't differentiate winners.
-ADAPTIVE_SIZING_ENABLED = True
-ADAPTIVE_LOOKBACK       = 20
-ADAPTIVE_HOT_WR         = 0.55
-ADAPTIVE_HOT_MULT       = 2.0     # was 1.5 — compound aggressively on hot streaks
-ADAPTIVE_COLD_WR        = 0.30
-ADAPTIVE_COLD_MULT      = 0.6
-ADAPTIVE_HARD_CAP_MULT  = 2.5     # was 2.0 — allows 0.0625 SOL max single trade
+# Hot streak = bet bigger. Cold streak = bet smaller.
+ADAPTIVE_SIZING_ENABLED = _env_bool("ADAPTIVE_SIZING_ENABLED", True)
+ADAPTIVE_LOOKBACK       = _env_int("ADAPTIVE_LOOKBACK",        20)
+ADAPTIVE_HOT_WR         = _env_float("ADAPTIVE_HOT_WR",         0.55)
+ADAPTIVE_HOT_MULT       = _env_float("ADAPTIVE_HOT_MULT",       1.25)
+ADAPTIVE_COLD_WR        = _env_float("ADAPTIVE_COLD_WR",        0.30)
+ADAPTIVE_COLD_MULT      = _env_float("ADAPTIVE_COLD_MULT",      0.50)
+ADAPTIVE_HARD_CAP_MULT  = _env_float("ADAPTIVE_HARD_CAP_MULT",  1.50)
 
-# MAXIMUM-MOONSHOT TP ladder. Pushed all targets way out — most winners
-# get caught by the trailing stop on the way down (which only activates
-# after a real profit), so we don't miss small wins. The big wins ride
-# uncapped to 10x, 20x, beyond.
-TAKE_PROFIT_LEVELS = [
-    {"gain_pct": 75,  "sell_pct": 15},   # +75%: tiny lock
-    {"gain_pct": 300, "sell_pct": 25},   # 4x: lock 25%
-    {"gain_pct": 800, "sell_pct": 30},   # 9x: lock 30%
-    # Final ~30% rides with trailing stop — uncapped, can hit 30x+
-]
+# Take-profit ladder. Default = balanced 50/100/200% with 25/25/25 sells
+# (50% rides for moonshot via trailing stop).
+TAKE_PROFIT_LEVELS = _env_json("TAKE_PROFIT_LEVELS", [
+    {"gain_pct": 50,  "sell_pct": 25},
+    {"gain_pct": 100, "sell_pct": 25},
+    {"gain_pct": 200, "sell_pct": 25},
+])
 
-# Trailing stop is the primary "small winner" capture mechanism now.
-# It does NOT activate until peak crosses TRAILING_STOP_MIN_PROFIT — so
-# small fluctuations near entry don't shake us out.
-TRAILING_STOP_ENABLED            = True
-TRAILING_STOP_MIN_PROFIT         = 15   # don't even start trailing until +15%
-TRAILING_STOP_PCT                = 18   # widened — give early winners more room
-TRAILING_STOP_MOONSHOT_PCT       = 35   # very wide once in moonshot mode
-TRAILING_STOP_MOONSHOT_TRIGGER   = 100  # at +100% peak, switch to moonshot trailing
+# Trailing stop — primary "lock in winners" mechanism. Inactive until peak
+# crosses TRAILING_STOP_MIN_PROFIT.
+TRAILING_STOP_ENABLED          = _env_bool("TRAILING_STOP_ENABLED",          True)
+TRAILING_STOP_MIN_PROFIT       = _env_float("TRAILING_STOP_MIN_PROFIT",      20.0)
+TRAILING_STOP_PCT              = _env_float("TRAILING_STOP_PCT",             15.0)
+TRAILING_STOP_MOONSHOT_PCT     = _env_float("TRAILING_STOP_MOONSHOT_PCT",    25.0)
+TRAILING_STOP_MOONSHOT_TRIGGER = _env_float("TRAILING_STOP_MOONSHOT_TRIGGER", 100.0)
 
-STOP_LOSS_PCT               = 10
-EMERGENCY_STOP_DRAWDOWN_PCT = 40
-TIME_EXIT_MINUTES           = 4    # was 8 — DATA: trades >6 min have 3.7% WR
+STOP_LOSS_PCT               = _env_float("STOP_LOSS_PCT",               15.0)
+EMERGENCY_STOP_DRAWDOWN_PCT = _env_float("EMERGENCY_STOP_DRAWDOWN_PCT", 25.0)
+TIME_EXIT_MINUTES           = _env_int("TIME_EXIT_MINUTES",              5)
 
-# Data-driven: trades <3 min have 59% WR, >6 min have 3.7% WR.
-# If after this many seconds the position hasn't moved either direction,
-# exit immediately — it's a dead token, don't wait for time_exit.
-NO_MOVEMENT_EXIT_SECONDS    = 120  # 2 min
-NO_MOVEMENT_BAND_PCT        = 3.0  # ±3% counts as "not moving"
+# No-movement exit: if position hasn't moved either direction in N seconds.
+NO_MOVEMENT_EXIT_SECONDS = _env_int("NO_MOVEMENT_EXIT_SECONDS", 90)
+NO_MOVEMENT_BAND_PCT     = _env_float("NO_MOVEMENT_BAND_PCT",   3.0)
 
 # ─── TIER 2 GUARDRAILS ─────────────────────────────────────────────────────────
-# Auto-pause new buys after this many consecutive losing closes.
-# Resumes after RESUME_AFTER_MINUTES of cooling off.
-LOSS_STREAK_LIMIT      = 6
-LOSS_STREAK_PAUSE_MIN  = 10
+LOSS_STREAK_LIMIT      = _env_int("LOSS_STREAK_LIMIT",      5)
+LOSS_STREAK_PAUSE_MIN  = _env_int("LOSS_STREAK_PAUSE_MIN", 15)
 
 # Daily PnL bands. If hit, pause all new buys for the rest of the UTC day.
-DAILY_LOSS_LIMIT_PCT   = 25      # still active — protects from catastrophic loss days
-DAILY_PROFIT_LOCK_PCT  = 99999   # DISABLED — keep trading no matter how high we go
+DAILY_LOSS_LIMIT_PCT  = _env_float("DAILY_LOSS_LIMIT_PCT",   20.0)
+DAILY_PROFIT_LOCK_PCT = _env_float("DAILY_PROFIT_LOCK_PCT", 9999.0)
 
-# Momentum-stall exit: if a position is in profit but price has not moved
-# more than this percent in either direction for STALL_WINDOW_SECONDS, sell.
-# Pump.fun gains stall = the pump is over.
-MOMENTUM_STALL_ENABLED      = True
-MOMENTUM_STALL_PCT_BAND     = 5.0    # ±5% movement window
-MOMENTUM_STALL_WINDOW_SEC   = 60     # stall duration that triggers exit
-MOMENTUM_STALL_MIN_PROFIT   = 5.0    # only trigger above +5% PnL
+# Momentum-stall exit.
+MOMENTUM_STALL_ENABLED    = _env_bool("MOMENTUM_STALL_ENABLED",      True)
+MOMENTUM_STALL_PCT_BAND   = _env_float("MOMENTUM_STALL_PCT_BAND",     5.0)
+MOMENTUM_STALL_WINDOW_SEC = _env_int("MOMENTUM_STALL_WINDOW_SEC",    60)
+MOMENTUM_STALL_MIN_PROFIT = _env_float("MOMENTUM_STALL_MIN_PROFIT",   5.0)
 
 # Holder concentration filter (rug indicator). Calls getTokenLargestAccounts.
 # Skip a token if top 10 holders own more than this % of supply.
