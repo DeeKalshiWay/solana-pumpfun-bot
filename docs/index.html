@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Solana Pump.fun Trading Bot · Portfolio</title>
-<meta name="description" content="Production async Python trading bot for Solana pump.fun ecosystem. +2,020% paper PnL, 1,521 trades, counterfactual learning loop.">
+<meta name="description" content="Async Python trading systems demo: real-time WS pipeline, adaptive risk engine, sqlite trade log, observability stack. Paper-only Solana pump.fun bot.">
 <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
 <style>
   :root {
@@ -138,29 +138,37 @@
   <!-- Hero -->
   <section class="hero">
     <h1>PUMP BOT</h1>
-    <div class="subtitle">SOLANA · PUMP.FUN · AUTONOMOUS TRADING SYSTEM</div>
+    <div class="subtitle">ASYNC PYTHON TRADING SYSTEMS DEMO · PAPER MODE</div>
+
+    <p style="max-width: 640px; margin: 16px auto 0; font-size: 13px; color: rgba(221,212,184,0.75); line-height: 1.6;">
+      Production-style architecture for low-latency event processing, applied
+      to pump.fun memecoin trading. Built to demonstrate systems engineering
+      &mdash; not as a profitable strategy. The trading layer is a paper-mode
+      test bed for the systems work underneath.
+    </p>
 
     <div class="stats">
       <div class="stat">
-        <div class="stat-val green">+7,284%</div>
-        <div class="stat-label">PAPER PNL · LIVE</div>
+        <div class="stat-val">~70 ms</div>
+        <div class="stat-label">DECISION LATENCY</div>
       </div>
       <div class="stat">
-        <div class="stat-val">2,045</div>
-        <div class="stat-label">CLOSED TRADES</div>
+        <div class="stat-val">1 → 8</div>
+        <div class="stat-label">WS PUB/SUB FAN-OUT</div>
       </div>
       <div class="stat">
-        <div class="stat-val">44.7%</div>
-        <div class="stat-label">WIN RATE</div>
+        <div class="stat-val">23 / 23</div>
+        <div class="stat-label">CI TESTS GREEN</div>
       </div>
       <div class="stat">
-        <div class="stat-val">8,442</div>
-        <div class="stat-label">COUNTERFACTUAL OUTCOMES</div>
+        <div class="stat-val">2</div>
+        <div class="stat-label">DEPLOY TARGETS · DOCKER + SYSTEMD</div>
       </div>
     </div>
 
     <div style="margin-top: 30px;">
       <a class="cta" href="https://github.com/DeeKalshiWay/solana-pumpfun-bot">VIEW SOURCE ON GITHUB</a>
+      <a class="cta" href="https://github.com/DeeKalshiWay/solana-pumpfun-bot/actions">CI</a>
       <a class="cta" href="#architecture">ARCHITECTURE</a>
     </div>
   </section>
@@ -194,14 +202,32 @@
 
   <!-- What it does -->
   <section>
-    <h2>What it does</h2>
-    <p>Autonomous trading bot for the Solana pump.fun ecosystem. Detects new token
-    launches via single-shared PumpPortal WebSocket, scores them across four factors,
-    sizes positions adaptively based on rolling win rate, and exits via a moonshot-optimized
-    take-profit ladder with adaptive trailing stops. Captures power-law winners while
-    capping individual losses at -10%.</p>
+    <h2>What this project demonstrates</h2>
+    <ul style="font-size: 13px; line-height: 1.9; color: rgba(221,212,184,0.85);">
+      <li><strong>Real-time async pipeline.</strong> One PumpPortal WebSocket
+      fans out via pub/sub to 8 detector modules. No duplicate connections,
+      no rate-limit waste.</li>
+      <li><strong>Reliability hygiene.</strong> Atomic JSON writes
+      (write-temp + <code>os.replace</code>), PID lockfile, watchdog
+      auto-restart, WS rate-limit backoff with jitter, log rotation + gzip.</li>
+      <li><strong>Adaptive risk engine.</strong> Kelly-lite sizing, multi-tier
+      circuit breakers, trailing stops with regime switch, no-movement and
+      time exits.</li>
+      <li><strong>Persistence.</strong> sqlite trade log with indexed columns
+      + raw-JSON forward-compat column. Dual-write transition keeps the
+      legacy JSONL authoritative until cutover.</li>
+      <li><strong>Observability.</strong> aiohttp dashboard at <code>:8765</code>,
+      7 REST endpoints, hourly equity snapshots, single-page SPA.</li>
+      <li><strong>Test + lint floor.</strong> ruff + mypy + pytest + Docker
+      build smoke on every push (GitHub Actions). 23 / 23 green.</li>
+      <li><strong>Two deployment paths.</strong> Docker compose for any Linux
+      host, or systemd unit + idempotent installer for bare-metal.</li>
+    </ul>
 
-    <p>Built end-to-end in async Python. ~5,000 lines, fourteen modules, single developer.</p>
+    <p style="margin-top: 16px; font-size: 12px; color: rgba(221,212,184,0.6);">
+      ~5,000 LOC async Python. Single developer.
+      <a href="https://github.com/DeeKalshiWay/solana-pumpfun-bot/blob/main/README.md#limitations" style="color: var(--gold);">Honest limitations &rarr;</a>
+    </p>
   </section>
 
   <!-- Architecture -->
@@ -254,12 +280,15 @@
     </div>
 
     <div class="card">
-      <div class="card-label">3. COUNTERFACTUAL LEARNING LOOP</div>
-      <p>Every rejected token gets re-polled 10 min later for market-cap delta. After
-      <strong>8,442 resolved outcomes</strong> across 15+ filter classes, every filter shows
-      strongly negative average outcome on rejects (e.g. <code>score_band_10</code> avg <code>−49.5%</code>,
-      <code>whale_init</code> avg <code>−27%</code>, <code>sym_blacklist_TEST</code> 100% rug rate). The strategy is
-      validated, not assumed.</p>
+      <div class="card-label">3. COUNTERFACTUAL LOOP &mdash; OBSERVABILITY, NOT VALIDATION</div>
+      <p>Every rejected token gets re-polled 10 min later for market-cap
+      delta and exit reason. Useful as <em>observability</em> &mdash; it shows
+      what each filter is killing. <strong>Not a held-out validation</strong>:
+      pump.fun&rsquo;s base rate is &gt;95% rug, so any filter looks
+      &ldquo;validated&rdquo; against an unfiltered universe. The honest
+      experiment splits train/test and checks whether rejects underperform
+      the <em>base rate</em> on a held-out set. Tracked as future work in the
+      README.</p>
     </div>
 
     <div class="card">
@@ -271,23 +300,48 @@
     </div>
   </section>
 
+  <!-- Numbers -->
+  <section>
+    <h2>Numbers</h2>
+    <div class="card">
+      <div class="card-label">CANONICAL RUN &middot; REALISTIC_PAPER_SIM=1</div>
+      <table style="margin-top: 8px;">
+        <tbody>
+          <tr><td>Window</td><td>2026-04-19 &rarr; live</td></tr>
+          <tr><td>Starting bankroll</td><td>1.0 SOL (virtual)</td></tr>
+          <tr><td>Closed trades</td><td>~2,940</td></tr>
+          <tr><td>Win rate</td><td>~42%</td></tr>
+          <tr><td>Largest single winner</td><td>+463%</td></tr>
+          <tr><td class="gold">Concentration risk</td><td class="gold">~60% of PnL from one ticker, multiple entries</td></tr>
+        </tbody>
+      </table>
+      <p style="margin-top: 10px; font-size: 11px; color: rgba(221,212,184,0.6);">
+        Earlier snapshots circulating elsewhere (1,521 trades / +7,100% / +7,284%)
+        are pre-realistic-friction-sim and superseded by the run above.
+      </p>
+    </div>
+  </section>
+
   <!-- Stack -->
   <section>
     <h2>Tech stack</h2>
     <p>
-      <span class="pill gold">Python 3.14</span>
+      <span class="pill gold">Python 3.12+</span>
       <span class="pill gold">asyncio</span>
       <span class="pill gold">aiohttp</span>
       <span class="pill gold">websockets</span>
       <span class="pill gold">solders</span>
+      <span class="pill gold">sqlite3</span>
       <span class="pill blue">Solana RPC</span>
       <span class="pill blue">Helius</span>
       <span class="pill blue">Jupiter</span>
       <span class="pill blue">PumpPortal</span>
-      <span class="pill green">SVG</span>
-      <span class="pill green">Custom dashboard</span>
-      <span class="pill green">PowerShell</span>
-      <span class="pill green">Windows Task Scheduler</span>
+      <span class="pill green">Docker</span>
+      <span class="pill green">systemd</span>
+      <span class="pill green">GitHub Actions</span>
+      <span class="pill green">ruff</span>
+      <span class="pill green">mypy</span>
+      <span class="pill green">pytest</span>
     </p>
   </section>
 
@@ -305,14 +359,45 @@
     </ul>
   </section>
 
-  <!-- Disclaimer -->
-  <div class="disclaimer">
-    <strong>Performance disclaimer:</strong> these are paper-trading results. Live trading
-    diverges 30–50% due to real slippage (5–30% per round-trip on volatile pump.fun
-    tokens), public-RPC latency (1–3s), MEV bots front-running, and tx failure rates.
-    Realistic live-vs-paper retention: ~50% of paper EV. Never trade money you cannot
-    afford to lose. Pump.fun has &gt;95% rug rate.
-  </div>
+  <!-- Limitations -->
+  <section>
+    <h2>Limitations</h2>
+    <p style="font-size: 12px; color: rgba(221,212,184,0.7); max-width: 720px;">
+      Honest self-critique is more valuable in a portfolio than a headline
+      PnL number. The trading strategy underneath this engineering has
+      known weaknesses:
+    </p>
+    <ul style="font-size: 12px; line-height: 1.8; color: rgba(221,212,184,0.8);">
+      <li><strong>Paper PnL is upper-bound, not predictive.</strong> The
+      realistic-friction simulator (size-dependent slippage, MEV tax,
+      ~5% tx-fail rate) cuts the curve materially vs. the legacy 1.5%
+      flat slippage path. Live retention on a power-law-tail strategy is
+      plausibly 0&ndash;20% of paper EV.
+      <strong>No real money has been traded with this system, and there
+      is no plan to.</strong></li>
+      <li><strong>The counterfactual loop is not held-out validation.</strong>
+      Rejected tokens are re-polled and shown to underperform, but
+      pump.fun&rsquo;s base rate is ~95% rug &mdash; any random filter
+      would look &ldquo;validated&rdquo; the same way.</li>
+      <li><strong>TP ladder (75 / 300 / 800 %) and 4-min time exit are
+      curve-fit</strong> to the trade history. They will not generalize
+      to a different market regime.</li>
+      <li><strong>Hot-streak 2&times; sizing assumes outcome
+      autocorrelation that pump.fun trades do not have.</strong> Closer
+      to a martingale on noise than a true Kelly bet. The 2.5&times; cap
+      limits ruin but does not fix the underlying logic.</li>
+      <li><strong>Strategy concentration:</strong> sqlite aggregate query
+      shows <code>momentum_stall</code> exits account for the bulk of
+      total paper PnL across ~1,140 trades; everything else is roughly
+      net-zero. ~60% of those gains traced back to a single ticker
+      caught four times. The result is a sample, not a strategy.</li>
+    </ul>
+    <p style="font-size: 12px; color: rgba(221,212,184,0.7); max-width: 720px;">
+      The portfolio value of this project is the systems engineering, not
+      the trading PnL. Pump.fun has &gt;95% rug rate; never trade money
+      you cannot afford to lose.
+    </p>
+  </section>
 
   <!-- Contact -->
   <section style="text-align: center; margin-top: 40px;">
