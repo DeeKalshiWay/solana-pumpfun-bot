@@ -5,13 +5,14 @@ Helius-only mode (pump.fun public API is Cloudflare-blocked in 2026).
 """
 
 import asyncio
-import aiohttp
-import websockets
 import json
 import time
-from loguru import logger
-from config import PUMPFUN_POLL_INTERVAL, MAX_TOKEN_AGE_MINUTES, HELIUS_API_KEY
 
+import aiohttp
+import websockets
+from loguru import logger
+
+from config import HELIUS_API_KEY
 
 # pump.fun program ID on Solana mainnet
 PUMP_PROGRAM_ID = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"

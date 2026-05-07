@@ -24,7 +24,7 @@ import json
 import os
 import time
 from collections import defaultdict
-from typing import Optional
+
 import aiohttp
 from loguru import logger
 
@@ -46,7 +46,7 @@ class CounterfactualLogger:
         # Pending: list of dicts with mint/reason/ts/mc_at_reject
         # In-memory only — if the bot dies mid-window we lose those, that's OK
         self._pending: list = []
-        self._session: Optional[aiohttp.ClientSession] = None
+        self._session: aiohttp.ClientSession | None = None
         os.makedirs("logs", exist_ok=True)
 
     # ── Public API ────────────────────────────────────────────────────────────
@@ -159,7 +159,7 @@ class CounterfactualLogger:
     def _rotate_outcomes(self):
         """Trim outcomes file to half size to bound disk usage."""
         try:
-            with open(OUTCOME_FILE, "r", encoding="utf-8") as f:
+            with open(OUTCOME_FILE, encoding="utf-8") as f:
                 lines = f.readlines()
             keep = lines[len(lines) // 2:]
             tmp = OUTCOME_FILE + ".tmp"
@@ -181,7 +181,7 @@ class CounterfactualLogger:
 
         rows = []
         try:
-            with open(OUTCOME_FILE, "r", encoding="utf-8") as f:
+            with open(OUTCOME_FILE, encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
                     if not line:

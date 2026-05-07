@@ -5,10 +5,11 @@ Used to enrich token data after initial detection from pump.fun.
 """
 
 import asyncio
+
 import aiohttp
 from loguru import logger
-from config import BIRDEYE_API_KEY, DEX_POLL_INTERVAL
 
+from config import BIRDEYE_API_KEY, DEX_POLL_INTERVAL
 
 DEXSCREENER_API = "https://api.dexscreener.com/latest/dex"
 BIRDEYE_API     = "https://public-api.birdeye.so"

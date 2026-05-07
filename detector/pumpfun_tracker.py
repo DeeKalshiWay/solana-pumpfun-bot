@@ -21,21 +21,18 @@ so the existing signal_scorer's `social_mentions_*` terms light up.
 Richer per-mint state is exposed via get_pumpfun_state(mint).
 """
 import asyncio
-import json
 import time
-from collections import defaultdict
 
 import aiohttp
 from loguru import logger
 
-from detector.social_monitor import record_mention
 from config import (
+    PUMPFUN_MAX_CONCURRENT_TRACKS,
+    PUMPFUN_POLL_INTERVAL_S,
     PUMPFUN_TRACK_ENABLED,
     PUMPFUN_TRACK_MINUTES,
-    PUMPFUN_POLL_INTERVAL_S,
-    PUMPFUN_MAX_CONCURRENT_TRACKS,
 )
-
+from detector.social_monitor import record_mention
 
 V3_COIN_URL = "https://frontend-api-v3.pump.fun/coins/{mint}"
 
@@ -132,7 +129,7 @@ class PumpFunTracker:
                     try:
                         snapshot = await self._fetch(url)
                         consecutive_errors = 0
-                    except Exception as e:
+                    except Exception:
                         consecutive_errors += 1
                         if consecutive_errors >= 5:
                             logger.debug(

@@ -16,15 +16,15 @@ import asyncio
 import os
 import socket
 import time
-from typing import Optional
+
 from aiohttp import web
 from loguru import logger
 
-from detector.creator_tracker import creator_tracker
-from detector.wallet_intel import wallet_intel
-from detector.influencer_monitor import influencer_monitor
 from analyzer.counterfactual import counterfactual
 from analyzer.score_bins import aggregate_by_score
+from detector.creator_tracker import creator_tracker
+from detector.influencer_monitor import influencer_monitor
+from detector.wallet_intel import wallet_intel
 
 
 def _get_lan_ip() -> str:
@@ -57,7 +57,7 @@ class WebDashboard:
         self.paper_trading = paper_trading
         self.report_logger = report_logger
         self.start_time    = time.time()
-        self._runner: Optional[web.AppRunner] = None
+        self._runner: web.AppRunner | None = None
 
     # ── Routes ────────────────────────────────────────────────────────────────
     async def index(self, request):
@@ -231,7 +231,7 @@ class WebDashboard:
         site = web.TCPSite(self._runner, WEB_HOST, WEB_PORT)
         await site.start()
         lan_ip = _get_lan_ip()
-        logger.success(f"Web dashboard running:")
+        logger.success("Web dashboard running:")
         logger.success(f"  Local:    http://127.0.0.1:{WEB_PORT}/")
         logger.success(f"  LAN/phone: http://{lan_ip}:{WEB_PORT}/")
 

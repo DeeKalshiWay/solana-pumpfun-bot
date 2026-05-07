@@ -6,15 +6,15 @@ Free aside from Solana network fees + pump.fun's 1% bonding curve fee.
 """
 
 import asyncio
-import aiohttp
 import base64
 import time
-from typing import Optional
+
+import aiohttp
 from loguru import logger
 from solders.keypair import Keypair
 from solders.transaction import VersionedTransaction
-from config import RPC_URL, SLIPPAGE_BPS, PRIORITY_FEE_MICROLAMPORTS
 
+from config import RPC_URL, SLIPPAGE_BPS
 
 PUMPPORTAL_LOCAL_API = "https://pumpportal.fun/api/trade-local"
 
@@ -65,14 +65,14 @@ class PumpPortalExecutor:
                     logger.warning(f"PumpPortal {resp.status}: {text[:200]}")
                     return None
                 return await resp.read()  # raw bytes
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning("PumpPortal timeout")
             return None
         except Exception as e:
             logger.warning(f"PumpPortal exception: {e}")
             return None
 
-    async def _sign_and_send(self, tx_bytes: bytes) -> Optional[str]:
+    async def _sign_and_send(self, tx_bytes: bytes) -> str | None:
         """Sign the PumpPortal-built transaction and submit via our RPC."""
         try:
             raw_tx = VersionedTransaction.from_bytes(tx_bytes)

@@ -8,6 +8,7 @@ import asyncio
 import re
 import time
 from collections import defaultdict
+
 from loguru import logger
 
 try:
@@ -23,11 +24,13 @@ except ImportError:
     TELETHON_AVAILABLE = False
 
 from config import (
+    TELEGRAM_API_HASH,
+    TELEGRAM_API_ID,
+    TELEGRAM_CHANNELS,
+    TELEGRAM_PHONE,
     TWITTER_BEARER_TOKEN,
-    TELEGRAM_API_ID, TELEGRAM_API_HASH, TELEGRAM_PHONE,
-    TELEGRAM_CHANNELS, TWITTER_KEYWORDS,
+    TWITTER_KEYWORDS,
 )
-
 
 # In-memory store: mint_address -> list of mention timestamps
 # Used to compute mention velocity (mentions per minute)

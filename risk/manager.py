@@ -14,29 +14,46 @@ import json
 import os
 import time
 from dataclasses import dataclass, field
-from typing import Dict, List
+
 from loguru import logger
 
 CLOSED_TRADES_FILE = "logs/closed_trades.jsonl"
 RISK_STATE_FILE    = "logs/risk_state.json"
+import datetime
+
 from config import (
-    MAX_SOL_PER_TRADE, MAX_POSITION_PCT, MAX_TOTAL_EXPOSURE_SOL,
-    STOP_LOSS_PCT, TRAILING_STOP_ENABLED, TRAILING_STOP_PCT,
-    TRAILING_STOP_MIN_PROFIT,
-    TRAILING_STOP_MOONSHOT_PCT, TRAILING_STOP_MOONSHOT_TRIGGER,
-    TAKE_PROFIT_LEVELS, EMERGENCY_STOP_DRAWDOWN_PCT, MAX_OPEN_POSITIONS,
+    ADAPTIVE_COLD_MULT,
+    ADAPTIVE_COLD_WR,
+    ADAPTIVE_HARD_CAP_MULT,
+    ADAPTIVE_HOT_MULT,
+    ADAPTIVE_HOT_WR,
+    ADAPTIVE_LOOKBACK,
+    ADAPTIVE_SIZING_ENABLED,
+    DAILY_LOSS_LIMIT_PCT,
+    DAILY_PROFIT_LOCK_PCT,
+    EMERGENCY_STOP_DRAWDOWN_PCT,
+    LOSS_STREAK_LIMIT,
+    LOSS_STREAK_PAUSE_MIN,
+    MAX_OPEN_POSITIONS,
+    MAX_POSITION_PCT,
+    MAX_SOL_PER_TRADE,
+    MAX_TOTAL_EXPOSURE_SOL,
+    MOMENTUM_STALL_ENABLED,
+    MOMENTUM_STALL_MIN_PROFIT,
+    MOMENTUM_STALL_PCT_BAND,
+    MOMENTUM_STALL_WINDOW_SEC,
+    NO_MOVEMENT_BAND_PCT,
+    NO_MOVEMENT_EXIT_SECONDS,
+    STOP_LOSS_PCT,
+    TAKE_PROFIT_LEVELS,
     TIME_EXIT_MINUTES,
-    LOSS_STREAK_LIMIT, LOSS_STREAK_PAUSE_MIN,
-    DAILY_LOSS_LIMIT_PCT, DAILY_PROFIT_LOCK_PCT,
-    MOMENTUM_STALL_ENABLED, MOMENTUM_STALL_PCT_BAND,
-    MOMENTUM_STALL_WINDOW_SEC, MOMENTUM_STALL_MIN_PROFIT,
-    NO_MOVEMENT_EXIT_SECONDS, NO_MOVEMENT_BAND_PCT,
-    ADAPTIVE_SIZING_ENABLED, ADAPTIVE_LOOKBACK,
-    ADAPTIVE_HOT_WR, ADAPTIVE_HOT_MULT,
-    ADAPTIVE_COLD_WR, ADAPTIVE_COLD_MULT, ADAPTIVE_HARD_CAP_MULT,
+    TRAILING_STOP_ENABLED,
+    TRAILING_STOP_MIN_PROFIT,
+    TRAILING_STOP_MOONSHOT_PCT,
+    TRAILING_STOP_MOONSHOT_TRIGGER,
+    TRAILING_STOP_PCT,
 )
 from detector.creator_tracker import creator_tracker
-import datetime
 
 
 @dataclass
@@ -71,8 +88,8 @@ class RiskManager:
     def __init__(self, wallet, executor):
         self.wallet                  = wallet
         self.executor                = executor
-        self.positions: Dict[str, Position] = {}
-        self.closed_trades: List[dict]      = []
+        self.positions: dict[str, Position] = {}
+        self.closed_trades: list[dict]      = []
         self.starting_sol_balance    = 0
         self.running                 = False
         self.emergency_stop_active   = False
@@ -113,7 +130,7 @@ class RiskManager:
         if not os.path.exists(CLOSED_TRADES_FILE):
             return
         try:
-            with open(CLOSED_TRADES_FILE, "r", encoding="utf-8") as f:
+            with open(CLOSED_TRADES_FILE, encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
                     if not line:
@@ -141,7 +158,7 @@ class RiskManager:
         """
         try:
             if os.path.exists(RISK_STATE_FILE):
-                with open(RISK_STATE_FILE, "r", encoding="utf-8") as f:
+                with open(RISK_STATE_FILE, encoding="utf-8") as f:
                     data = json.load(f)
                 v = float(data.get("original_starting_sol", current_balance))
                 if v > 0:

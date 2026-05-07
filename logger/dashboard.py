@@ -5,23 +5,23 @@ Live Rich terminal dashboard with actual failure reasons.
 
 import asyncio
 import time
+
 from loguru import logger
+from rich import box
 from rich.console import Console
-from rich.table import Table
-from rich.panel import Panel
 from rich.layout import Layout
 from rich.live import Live
-from rich import box
-from typing import Optional
-from config import LOG_FILE, TRADE_LOG_FILE
+from rich.panel import Panel
+from rich.table import Table
 
+from config import LOG_FILE, TRADE_LOG_FILE
 
 console = Console()
 
 
 def setup_logging():
-    import sys
     import os
+    import sys
 
     os.makedirs("logs", exist_ok=True)
     logger.remove()
@@ -57,7 +57,7 @@ class Dashboard:
         self.signal_scorer  = signal_scorer
         self.recent_signals = []
         self.start_time     = time.time()
-        self._live: Optional[Live] = None
+        self._live: Live | None = None
 
     def record_signal(self, token: dict):
         self.recent_signals.insert(0, token)

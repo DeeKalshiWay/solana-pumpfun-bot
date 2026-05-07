@@ -13,7 +13,7 @@ import asyncio
 import json
 import os
 import time
-from typing import Optional
+
 from loguru import logger
 
 REPORT_FILE       = "logs/report.jsonl"
@@ -179,7 +179,7 @@ class ReportLogger:
             return []
         out = []
         try:
-            with open(REPORT_FILE, "r", encoding="utf-8") as f:
+            with open(REPORT_FILE, encoding="utf-8") as f:
                 for line in f:
                     line = line.strip()
                     if line:

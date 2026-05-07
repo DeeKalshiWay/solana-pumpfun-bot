@@ -7,25 +7,30 @@ spending real SOL. Set False to go live.
 import asyncio
 import signal
 import sys
+
 import aiohttp
 from loguru import logger
 
+from analyzer.counterfactual import counterfactual
+from analyzer.signal_scorer import SignalScorer
 from config import (
-    PRIVATE_KEY, MAX_SOL_PER_TRADE, MIN_BUY_SCORE, MAX_OPEN_POSITIONS,
-    PAPER_TRADING, PAPER_STARTING_SOL,
+    MAX_OPEN_POSITIONS,
+    MAX_SOL_PER_TRADE,
+    MIN_BUY_SCORE,
+    PAPER_STARTING_SOL,
+    PAPER_TRADING,
+    PRIVATE_KEY,
 )
+from detector.dex_monitor import TrendingScanner
+from detector.influencer_monitor import influencer_monitor
 from detector.pumpfun_monitor import PumpFunMonitor
 from detector.pumpfun_tracker import PumpFunTracker
-from detector.dex_monitor import TrendingScanner
 from detector.social_monitor import SocialMonitor
 from detector.wallet_intel import wallet_intel
-from detector.influencer_monitor import influencer_monitor
-from analyzer.signal_scorer import SignalScorer
-from risk.manager import RiskManager
 from logger.dashboard import Dashboard, setup_logging
-from logger.web_server import WebDashboard
 from logger.report import ReportLogger
-from analyzer.counterfactual import counterfactual
+from logger.web_server import WebDashboard
+from risk.manager import RiskManager
 
 
 async def _resolve_tokens_received(result: dict, mint: str, wallet, retries: int = 4, delay: float = 2.0):
@@ -48,7 +53,7 @@ async def trade_loop(trade_queue, executor, risk_manager, dashboard, wallet):
     while True:
         try:
             token = await asyncio.wait_for(trade_queue.get(), timeout=1.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             continue
 
         if risk_manager.emergency_stop_active:
@@ -87,6 +92,7 @@ async def trade_loop(trade_queue, executor, risk_manager, dashboard, wallet):
 
 async def price_monitor_loop(risk_manager, executor):
     import aiohttp
+
     from config import JUPITER_API_URL, SOL_MINT
 
     async with aiohttp.ClientSession() as session:
@@ -161,7 +167,7 @@ def _acquire_pid_lock():
 
     if os.path.exists(PID_LOCK_FILE):
         try:
-            with open(PID_LOCK_FILE, "r") as f:
+            with open(PID_LOCK_FILE) as f:
                 old_pid = int(f.read().strip())
         except Exception:
             old_pid = None
@@ -207,7 +213,7 @@ def _release_pid_lock():
     import os
     try:
         if os.path.exists(PID_LOCK_FILE):
-            with open(PID_LOCK_FILE, "r") as f:
+            with open(PID_LOCK_FILE) as f:
                 pid = int(f.read().strip())
             if pid == os.getpid():
                 os.remove(PID_LOCK_FILE)
@@ -222,7 +228,7 @@ async def main():
     logger.info("=" * 60)
     logger.info("  PUMP BOT STARTING")
     if PAPER_TRADING:
-        logger.warning(f"  *** PAPER TRADING MODE — no real money ***")
+        logger.warning("  *** PAPER TRADING MODE — no real money ***")
         logger.warning(f"  Virtual balance: {PAPER_STARTING_SOL} SOL")
     else:
         logger.info("  *** LIVE TRADING — real money at risk ***")
@@ -238,13 +244,13 @@ async def main():
     trade_queue = asyncio.Queue(maxsize=50)
 
     if PAPER_TRADING:
-        from trader.paper_wallet import PaperWallet
         from trader.paper_executor import PaperExecutor
+        from trader.paper_wallet import PaperWallet
         wallet   = PaperWallet(PAPER_STARTING_SOL)
         executor = PaperExecutor(wallet)
     else:
-        from trader.wallet import SolanaWallet
         from trader.executor import TradeExecutor
+        from trader.wallet import SolanaWallet
         wallet = SolanaWallet()
         await wallet.start()
         executor = TradeExecutor(wallet.keypair)

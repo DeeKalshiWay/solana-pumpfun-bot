@@ -29,7 +29,7 @@ def _load_trades() -> list:
         return []
     out = []
     try:
-        with open(CLOSED_TRADES_FILE, "r", encoding="utf-8") as f:
+        with open(CLOSED_TRADES_FILE, encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
                 if not line:

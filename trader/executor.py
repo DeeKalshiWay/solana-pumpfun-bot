@@ -4,19 +4,16 @@ Smart router: Jupiter for Raydium/graduated tokens, PumpPortal for bonding-curve
 """
 
 import asyncio
-import aiohttp
 import base64
 import time
-from typing import Optional
+
+import aiohttp
 from loguru import logger
 from solders.keypair import Keypair
 from solders.transaction import VersionedTransaction
-from config import (
-    JUPITER_API_URL, RPC_URL, SLIPPAGE_BPS,
-    PRIORITY_FEE_MICROLAMPORTS, SOL_MINT
-)
-from trader.pumpportal_executor import PumpPortalExecutor
 
+from config import JUPITER_API_URL, PRIORITY_FEE_MICROLAMPORTS, RPC_URL, SLIPPAGE_BPS, SOL_MINT
+from trader.pumpportal_executor import PumpPortalExecutor
 
 MAX_PRICE_IMPACT_PCT = 40.0
 
@@ -85,7 +82,7 @@ class TradeExecutor:
         except Exception:
             return None
 
-    async def _sign_and_send(self, tx_base64: str) -> Optional[str]:
+    async def _sign_and_send(self, tx_base64: str) -> str | None:
         try:
             tx_bytes = base64.b64decode(tx_base64)
             raw_tx = VersionedTransaction.from_bytes(tx_bytes)

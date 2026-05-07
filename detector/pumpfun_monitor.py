@@ -19,12 +19,12 @@ at ~85 SOL deposited beyond the virtual baseline.
 """
 
 import asyncio
-import websockets
 import json
 import time
-from typing import Callable
-from loguru import logger
+from collections.abc import Callable
 
+import websockets
+from loguru import logger
 
 PUMPPORTAL_WS        = "wss://pumpportal.fun/api/data"
 MIGRATION_SOL_TARGET = 85.0   # ~85 SOL triggers migration to Raydium

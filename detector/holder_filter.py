@@ -9,12 +9,12 @@ Calls getTokenLargestAccounts + getTokenSupply on the configured RPC.
 Cached for 60s per mint to avoid hammering RPC for re-scored tokens.
 """
 
-import asyncio
 import time
+
 import aiohttp
 from loguru import logger
-from config import RPC_URL, HOLDER_CONCENTRATION_LIMIT_PCT
 
+from config import HOLDER_CONCENTRATION_LIMIT_PCT, RPC_URL
 
 _cache: dict = {}      # mint -> (timestamp, top10_pct)
 _CACHE_TTL = 60        # seconds
@@ -75,7 +75,7 @@ async def get_top10_concentration(session: aiohttp.ClientSession, mint: str) -> 
         _cache[mint] = (now, pct)
         return pct
 
-    except asyncio.TimeoutError:
+    except TimeoutError:
         return 0
     except Exception as e:
         logger.debug(f"[HOLDER] {mint[:8]} concentration check error: {e}")

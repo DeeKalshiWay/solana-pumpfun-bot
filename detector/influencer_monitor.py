@@ -23,7 +23,7 @@ import json
 import os
 import re
 import time
-from typing import Dict, Set
+
 import aiohttp
 from loguru import logger
 
@@ -54,16 +54,16 @@ class InfluencerMonitor:
 
     def __init__(self):
         self.running = False
-        self._mentions: Dict[str, dict] = {}    # ticker_upper -> {ts, handle}
+        self._mentions: dict[str, dict] = {}    # ticker_upper -> {ts, handle}
         self._handles: list = []
-        self._user_id_cache: Dict[str, str] = {}
+        self._user_id_cache: dict[str, str] = {}
         self._load_handles()
 
     def _load_handles(self):
         os.makedirs("logs", exist_ok=True)
         if os.path.exists(INFLUENCER_FILE):
             try:
-                with open(INFLUENCER_FILE, "r", encoding="utf-8") as f:
+                with open(INFLUENCER_FILE, encoding="utf-8") as f:
                     self._handles = json.load(f).get("handles", DEFAULT_HANDLES)
                 logger.info(f"[INFLUENCER] Loaded {len(self._handles)} handles from disk")
                 return

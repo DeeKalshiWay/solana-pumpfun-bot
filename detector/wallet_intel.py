@@ -25,10 +25,8 @@ import asyncio
 import json
 import os
 import time
-from collections import defaultdict
-from typing import Dict, Set
-from loguru import logger
 
+from loguru import logger
 
 BOT_WALLET_FILE       = "logs/bot_wallets.json"
 BUNDLE_LAUNCH_FILE    = "logs/bundled_launches.json"
@@ -49,16 +47,16 @@ class WalletIntel:
         self.running = False
 
         # Bot wallet store: address -> {"buys": int, "last_seen": ts, "mints": [recent 50 mints]}
-        self._wallets: Dict[str, dict] = {}
+        self._wallets: dict[str, dict] = {}
 
         # Bundle store: mint -> {"creator": str, "early_buyers": set, "is_bundled": bool}
-        self._bundles: Dict[str, dict] = {}
+        self._bundles: dict[str, dict] = {}
 
         # Snapshot of finalized bundle decisions: mint -> True/False
-        self._bundle_decided: Dict[str, bool] = {}
+        self._bundle_decided: dict[str, bool] = {}
 
         # Mints we are still in the bundle observation window for
-        self._observing: Set[str] = set()
+        self._observing: set[str] = set()
 
         self._load()
 
@@ -67,14 +65,14 @@ class WalletIntel:
         os.makedirs("logs", exist_ok=True)
         if os.path.exists(BOT_WALLET_FILE):
             try:
-                with open(BOT_WALLET_FILE, "r", encoding="utf-8") as f:
+                with open(BOT_WALLET_FILE, encoding="utf-8") as f:
                     self._wallets = json.load(f)
                 logger.info(f"[WALLET-INTEL] Loaded {len(self._wallets)} buyer wallets")
             except Exception as e:
                 logger.warning(f"[WALLET-INTEL] Could not load wallets: {e}")
         if os.path.exists(BUNDLE_LAUNCH_FILE):
             try:
-                with open(BUNDLE_LAUNCH_FILE, "r", encoding="utf-8") as f:
+                with open(BUNDLE_LAUNCH_FILE, encoding="utf-8") as f:
                     self._bundle_decided = json.load(f)
                 logger.info(f"[WALLET-INTEL] Loaded {len(self._bundle_decided)} bundle decisions")
             except Exception as e:

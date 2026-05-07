@@ -6,6 +6,7 @@ Persists to disk so the equity curve survives bot restarts.
 
 import json
 import os
+
 from loguru import logger
 
 PAPER_STATE_FILE = "logs/paper_wallet.json"
@@ -22,7 +23,7 @@ class PaperWallet:
         os.makedirs("logs", exist_ok=True)
         if os.path.exists(PAPER_STATE_FILE):
             try:
-                with open(PAPER_STATE_FILE, "r", encoding="utf-8") as f:
+                with open(PAPER_STATE_FILE, encoding="utf-8") as f:
                     data = json.load(f)
                 bal = float(data.get("balance_sol", starting_balance))
                 logger.info(f"[PAPER] Restored balance from disk: {bal:.6f} SOL")

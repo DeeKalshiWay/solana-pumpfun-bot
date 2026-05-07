@@ -10,24 +10,29 @@ Upgraded with open-source alpha strategies:
 """
 
 import asyncio
-import time
-from typing import Tuple
-from loguru import logger
 import datetime
-from config import (
-    MIN_BUY_SCORE, MAX_BONDING_CURVE_PCT, BUY_COOLDOWN_SECONDS,
-    ATH_RATIO_REJECT_BELOW, DEAD_HOURS_UTC,
-    SYMBOL_BLACKLIST_EXACT, NAME_BLACKLIST_SUBSTRINGS,
-)
-from detector.dex_monitor import DexMonitor
-from detector.social_monitor import get_social_stats
-from detector.creator_tracker import creator_tracker
-from detector.pumpfun_tracker import get_pumpfun_state
-from detector.holder_filter import get_top10_concentration, concentration_too_high
-from detector.wallet_intel import wallet_intel
-from detector.influencer_monitor import influencer_monitor
-from analyzer.counterfactual import counterfactual
+import time
+
 import aiohttp
+from loguru import logger
+
+from analyzer.counterfactual import counterfactual
+from config import (
+    ATH_RATIO_REJECT_BELOW,
+    BUY_COOLDOWN_SECONDS,
+    DEAD_HOURS_UTC,
+    MAX_BONDING_CURVE_PCT,
+    MIN_BUY_SCORE,
+    NAME_BLACKLIST_SUBSTRINGS,
+    SYMBOL_BLACKLIST_EXACT,
+)
+from detector.creator_tracker import creator_tracker
+from detector.dex_monitor import DexMonitor
+from detector.holder_filter import concentration_too_high, get_top10_concentration
+from detector.influencer_monitor import influencer_monitor
+from detector.pumpfun_tracker import get_pumpfun_state
+from detector.social_monitor import get_social_stats
+from detector.wallet_intel import wallet_intel
 
 
 class SignalScorer:
@@ -58,7 +63,7 @@ class SignalScorer:
         while self.running:
             try:
                 token = await asyncio.wait_for(self.raw_queue.get(), timeout=1.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 continue
             asyncio.create_task(self._score_token(token))
 
@@ -234,7 +239,7 @@ class SignalScorer:
         return True
 
     # ── Score Computation ─────────────────────────────────────────────────────
-    def _compute_score(self, token: dict) -> Tuple[int, dict]:
+    def _compute_score(self, token: dict) -> tuple[int, dict]:
         breakdown = {}
 
         # ── Factor 1: Creator signal (0-25) ──────────────────────────────────

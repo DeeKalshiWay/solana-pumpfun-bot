@@ -12,8 +12,10 @@ Top 10 creators show statistically significant graduation advantage.
 import json
 import os
 import time
+
 from loguru import logger
-from config import CREATOR_DB_FILE, CREATOR_TOP_N, CREATOR_MIN_LAUNCHES
+
+from config import CREATOR_DB_FILE, CREATOR_MIN_LAUNCHES, CREATOR_TOP_N
 
 
 class CreatorTracker:
@@ -30,7 +32,7 @@ class CreatorTracker:
         os.makedirs("logs", exist_ok=True)
         if os.path.exists(CREATOR_DB_FILE):
             try:
-                with open(CREATOR_DB_FILE, "r") as f:
+                with open(CREATOR_DB_FILE) as f:
                     self._db = json.load(f)
                 logger.info(f"[CREATOR] Loaded {len(self._db)} creators from DB")
             except Exception as e:

@@ -6,12 +6,12 @@ into a 0-100 buy score. Tokens above MIN_BUY_SCORE get queued for execution.
 
 import asyncio
 import time
-from typing import Tuple
+
 from loguru import logger
+
 from config import MIN_BUY_SCORE, MIN_LIQUIDITY_SOL
 from detector.dex_monitor import DexMonitor
 from detector.social_monitor import get_social_stats
-
 
 SOL_USD_APPROX = 150.0
 
@@ -38,7 +38,7 @@ class SignalScorer:
         while self.running:
             try:
                 token = await asyncio.wait_for(self.raw_queue.get(), timeout=1.0)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 continue
             asyncio.create_task(self._score_token(token))
 
@@ -85,7 +85,7 @@ class SignalScorer:
 
     def _passes_hard_filters(self, token: dict) -> bool:
         if token.get("rug_risk_flag"):
-            logger.warning(f"  ✗ Rug risk flag")
+            logger.warning("  ✗ Rug risk flag")
             return False
 
         liq_usd = token.get("liquidity_usd", 0)
@@ -101,7 +101,7 @@ class SignalScorer:
 
         return True
 
-    def _compute_score(self, token: dict) -> Tuple[int, dict]:
+    def _compute_score(self, token: dict) -> tuple[int, dict]:
         breakdown = {}
 
         # ── Factor 1: Community traction (0-25) ────────────────────────────
