@@ -54,6 +54,7 @@ from config import (
     TRAILING_STOP_PCT,
 )
 from detector.creator_tracker import creator_tracker
+from logger.trade_db import get_trade_db
 
 
 @dataclass
@@ -126,7 +127,20 @@ class RiskManager:
 
     # ── Persistence helpers ───────────────────────────────────────────────────
     def _load_closed_trades(self):
-        """Restore closed_trades from JSONL so the TRADES tab survives restarts."""
+        """Restore closed_trades for the TRADES tab. Prefers the sqlite db
+        (logs/trades.db); falls back to the legacy JSONL when the db is
+        empty or missing — keeps the bot bootable on a fresh checkout
+        before the migrator has been run."""
+        try:
+            db_rows = get_trade_db().load_all()
+        except Exception as e:
+            logger.warning(f"[RISK] trade db read failed, falling back to jsonl: {e}")
+            db_rows = []
+
+        if db_rows:
+            self.closed_trades.extend(db_rows)
+            return
+
         if not os.path.exists(CLOSED_TRADES_FILE):
             return
         try:
@@ -143,12 +157,19 @@ class RiskManager:
             logger.warning(f"[RISK] Could not load closed trades: {e}")
 
     def _append_closed_trade(self, record: dict):
-        """Append-only persistence — one line per trade, never rewritten."""
+        """Dual-write: JSONL (legacy, append-only, crash-proven) + sqlite.
+        JSONL stays authoritative during the transition — losing a db
+        write is recoverable from the JSONL via the migrator. The
+        reverse is not true, so JSONL writes first."""
         try:
             with open(CLOSED_TRADES_FILE, "a", encoding="utf-8") as f:
                 f.write(json.dumps(record) + "\n")
         except Exception as e:
-            logger.warning(f"[RISK] Trade append failed: {e}")
+            logger.warning(f"[RISK] JSONL trade append failed: {e}")
+        try:
+            get_trade_db().insert(record)
+        except Exception as e:
+            logger.warning(f"[RISK] sqlite trade insert failed: {e}")
 
     def _load_or_seed_starting_balance(self, current_balance: float) -> float:
         """

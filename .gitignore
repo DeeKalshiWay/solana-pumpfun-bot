@@ -29,6 +29,12 @@ bundled_launches.json.tmp
 counterfactual.jsonl
 counterfactual_pending.jsonl
 report.jsonl
+trades.db
+trades.db-wal
+trades.db-shm
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
 influencers.json
 job_search/reminder.log
 job_search/applications.md
