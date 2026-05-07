@@ -554,12 +554,12 @@
       "closed_trades": 2013
     },
     {
-      "ts": 1778111744,
-      "balance_sol": 57.865624,
+      "ts": 1778112047,
+      "balance_sol": 61.45443,
       "starting_sol": 1.0,
-      "pnl_pct": 5686.56,
-      "closed_trades": 2021
+      "pnl_pct": 6045.44,
+      "closed_trades": 2026
     }
   ],
-  "generated_at": 1778111744
+  "generated_at": 1778112047
 }
