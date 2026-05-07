@@ -1,4 +1,4 @@
-﻿aiohttp
+aiohttp
 playwright
 tweepy
 telethon
