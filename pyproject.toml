@@ -1,0 +1,70 @@
+[project]
+name = "pump_bot"
+version = "0.1.0"
+description = "Async Solana pump.fun trading systems demo (paper mode)"
+requires-python = ">=3.12"
+readme = "README.md"
+license = { file = "LICENSE" }
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+exclude = [
+    "venv",
+    ".venv",
+    "__pycache__",
+    "logs",
+    "tools",
+    "job_search",
+    "memory",
+    "docs",
+    "fix.py",
+    "manual_trade.py",
+    "probe_comments.py",
+]
+
+[tool.ruff.lint]
+# Conservative starter set. Tighten as the codebase gets cleaned up.
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = [
+    "E501",   # line length — handled by formatter, lots of long log strings
+    "E402",   # module-level import not at top — config import order in main.py
+    "E701",   # multi-statement single line — legacy style, used everywhere
+    "E702",   # statement ends with semicolon — same legacy style
+    "B007",   # unused loop variable — false positives in dict iteration
+    "B008",   # function call in default argument — common with dataclasses
+    "B023",   # function defined in loop binding closure — by-design in monitor loops
+    "B904",   # raise from in except — only one site, low value to fix now
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["F401", "F811"]
+
+[tool.mypy]
+python_version = "3.12"
+# Lenient by design — codebase isn't fully typed yet. Goal is to catch
+# syntax errors, import errors, and obvious type mismatches in CI without
+# blocking on legacy untyped code. Tighten module by module over time.
+ignore_missing_imports = true
+follow_imports = "silent"
+warn_unused_ignores = true
+warn_redundant_casts = true
+no_implicit_optional = true
+exclude = [
+    "venv/",
+    ".venv/",
+    "tests/",
+    "tools/",
+    "job_search/",
+    "fix\\.py",
+    "manual_trade\\.py",
+    "probe_comments\\.py",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-q --tb=short"
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
