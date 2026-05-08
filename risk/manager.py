@@ -205,17 +205,25 @@ class RiskManager:
             self.pause_reason = f"loss_streak_pause_{mins:.0f}min"
             return True
 
-        # Daily baseline reset on UTC date change
+        # Daily baseline reset on UTC date change. Baseline is total EQUITY
+        # (liquid SOL + market value of any positions held over midnight) so
+        # we can compare like-to-like to current equity below.
         today = datetime.datetime.utcnow().date()
         if self.day_baseline_date != today:
-            self.day_baseline_balance = await self.wallet.get_sol_balance()
+            sol = await self.wallet.get_sol_balance()
+            held = sum(p.current_price * p.tokens_held for p in self.positions.values())
+            self.day_baseline_balance = sol + held
             self.day_baseline_date    = today
             self.day_paused           = False
 
-        # Daily PnL bands
+        # Daily PnL bands — measure on total equity, not liquid SOL alone.
+        # Otherwise opening a position registers as an immediate "loss" because
+        # the SOL has left the wallet but the position market value isn't counted.
         if self.day_baseline_balance > 0:
-            current = await self.wallet.get_sol_balance()
-            day_pnl_pct = ((current - self.day_baseline_balance) / self.day_baseline_balance) * 100
+            sol = await self.wallet.get_sol_balance()
+            held = sum(p.current_price * p.tokens_held for p in self.positions.values())
+            current_equity = sol + held
+            day_pnl_pct = ((current_equity - self.day_baseline_balance) / self.day_baseline_balance) * 100
             if day_pnl_pct <= -DAILY_LOSS_LIMIT_PCT:
                 self.day_paused = True
                 self.pause_reason = f"daily_loss_{day_pnl_pct:.1f}pct"
