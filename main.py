@@ -148,24 +148,85 @@ async def trade_loop(trade_queue, executor, risk_manager, dashboard, wallet):
 
 
 async def price_monitor_loop(risk_manager, executor):
+    """Poll the freshest price source for each open position.
+
+    For pump.fun bonding-curve tokens we read the bonding-curve PDA directly
+    via getAccountInfo — instant freshness, no third-party lag. DexScreener
+    polled at 5s was the strategy's biggest blind spot: by the time it
+    reflected a +200% pump, the token was already rolling over and our
+    sells fired into a worse fill.
+
+    Fan out the per-position queries with asyncio.gather so a slow RPC on
+    one mint can't starve the others.
+    """
     import aiohttp
 
-    from config import JUPITER_API_URL, SOL_MINT
+    from config import JUPITER_API_URL, RPC_URL, SOL_MINT
 
     async with aiohttp.ClientSession() as session:
         while True:
-            for mint, pos in list(risk_manager.positions.items()):
-                price = await _get_token_price(session, mint, JUPITER_API_URL, SOL_MINT)
-                if price > 0:
-                    risk_manager.update_price(mint, price)
-                    if hasattr(executor, "update_price"):
-                        executor.update_price(mint, price)
-            await asyncio.sleep(5)
+            mints = list(risk_manager.positions.keys())
+            if mints:
+                results = await asyncio.gather(
+                    *[_get_token_price(session, m, JUPITER_API_URL, SOL_MINT, RPC_URL) for m in mints],
+                    return_exceptions=True,
+                )
+                for mint, price in zip(mints, results):
+                    if isinstance(price, (int, float)) and price > 0:
+                        risk_manager.update_price(mint, price)
+                        if hasattr(executor, "update_price"):
+                            executor.update_price(mint, price)
+            await asyncio.sleep(1.5)
 
 
-async def _get_token_price(session, mint: str, jupiter_url: str, sol_mint: str) -> float:
-    """Try Jupiter first, fall back to DexScreener for pump.fun bonding-curve tokens."""
-    # Jupiter
+# pump.fun program ID — bonding-curve PDA derivation
+_PUMP_PROGRAM_ID = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
+
+
+async def _bonding_curve_price(session, mint: str, rpc_url: str) -> float:
+    """Read the pump.fun bonding-curve PDA directly. Returns SOL per raw
+    token unit, or 0 if the curve is missing (token migrated to Raydium).
+
+    Layout: 8b discriminator + u64 v_token_reserves + u64 v_sol_reserves + ...
+    Source of truth — no indexer lag, sub-second freshness.
+    """
+    try:
+        from solders.pubkey import Pubkey
+        prog = Pubkey.from_string(_PUMP_PROGRAM_ID)
+        bc, _ = Pubkey.find_program_address([b"bonding-curve", bytes(Pubkey.from_string(mint))], prog)
+        payload = {
+            "jsonrpc": "2.0", "id": 1, "method": "getAccountInfo",
+            "params": [str(bc), {"encoding": "base64", "commitment": "confirmed"}],
+        }
+        async with session.post(rpc_url, json=payload,
+                                timeout=aiohttp.ClientTimeout(total=4)) as resp:
+            if resp.status != 200:
+                return 0.0
+            data = await resp.json()
+        val = (data.get("result") or {}).get("value")
+        if not val:
+            return 0.0  # migrated or curve closed
+        import base64
+        import struct
+        raw = base64.b64decode(val["data"][0])
+        # u64 LE: v_token_reserves, v_sol_reserves
+        v_tok, v_sol = struct.unpack_from("<QQ", raw, 8)
+        if v_tok == 0:
+            return 0.0
+        return (v_sol / 1e9) / v_tok  # SOL per raw token unit
+    except Exception:
+        return 0.0
+
+
+async def _get_token_price(session, mint: str, jupiter_url: str, sol_mint: str, rpc_url: str) -> float:
+    """Bonding-curve PDA first (fastest for pump.fun), then Jupiter (post-migration),
+    then DexScreener as a last resort."""
+    # 1) Bonding curve direct read — instant, no indexer lag
+    price = await _bonding_curve_price(session, mint, rpc_url)
+    if price > 0:
+        return price
+
+    # 2) Jupiter — relevant only for migrated/Raydium tokens
     try:
         params = {
             "inputMint":   mint,
@@ -186,7 +247,7 @@ async def _get_token_price(session, mint: str, jupiter_url: str, sol_mint: str) 
     except Exception:
         pass
 
-    # DexScreener fallback
+    # 3) DexScreener — last resort
     try:
         async with session.get(
             f"https://api.dexscreener.com/latest/dex/tokens/{mint}",
