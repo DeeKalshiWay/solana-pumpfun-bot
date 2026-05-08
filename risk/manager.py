@@ -560,8 +560,12 @@ class RiskManager:
             )
             return
 
-        # Wait a couple seconds for the SOL credit to settle, then capture delta.
-        await asyncio.sleep(2)
+        # Wait for the SOL credit to settle on Helius, then capture the delta.
+        # 2s was too short — observed PnL accounting consistently logging
+        # sol_received=0 even when the wallet really did receive SOL. Helius
+        # commitment lag for getBalance after a freshly-confirmed PumpPortal
+        # sell is typically 3-5s.
+        await asyncio.sleep(6)
         sol_after = await self.wallet.get_sol_balance()
         result["sol_received"] = max(0.0, sol_after - sol_before)
         self.close_position(mint, result)
