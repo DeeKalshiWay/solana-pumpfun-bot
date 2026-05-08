@@ -58,7 +58,7 @@ def _env_json(name: str, default):
         return default
 
 # ─── PAPER TRADING ─────────────────────────────────────────────────────────────
-PAPER_TRADING       = True    # Set False to trade with real money
+PAPER_TRADING       = False   # Set False to trade with real money
 PAPER_STARTING_SOL  = 1.0    # Virtual SOL balance for paper mode
 PAPER_TIME_EXIT_MIN = 10      # Force-exit paper positions after N minutes
 

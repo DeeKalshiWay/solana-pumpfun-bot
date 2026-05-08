@@ -5,8 +5,10 @@ spending real SOL. Set False to go live.
 """
 
 import asyncio
+import faulthandler
 import signal
 import sys
+import threading
 
 import aiohttp
 from loguru import logger
@@ -33,8 +35,54 @@ from logger.web_server import WebDashboard
 from risk.manager import RiskManager
 
 
-async def _resolve_tokens_received(result: dict, mint: str, wallet, retries: int = 4, delay: float = 2.0):
-    """Query wallet balance after a PumpPortal buy to get actual tokens received."""
+async def _resolve_tokens_received(result: dict, mint: str, wallet, retries: int = 8, delay: float = 1.5):
+    """Resolve tokens received from a PumpPortal buy.
+
+    Primary path: parse postTokenBalances from the buy tx receipt — this is
+    the on-chain source of truth and works for both legacy SPL and Token-2022
+    mints (pump.fun uses Token-2022). Polling the wallet via
+    getTokenAccountsByOwner can race with indexer lag for freshly-created ATAs.
+
+    Fallback: poll wallet.get_token_balance.
+    """
+    sig = result.get("signature")
+    owner_str = str(wallet.pubkey)
+
+    if sig:
+        for attempt in range(retries):
+            await asyncio.sleep(delay)
+            try:
+                rpc_resp = await wallet._rpc("getTransaction", [
+                    sig,
+                    {"encoding": "jsonParsed",
+                     "maxSupportedTransactionVersion": 0,
+                     "commitment": "confirmed"},
+                ])
+                res = rpc_resp.get("result")
+                if not res:
+                    continue
+                meta = res.get("meta", {}) or {}
+                if meta.get("err"):
+                    logger.warning(f"[TOKEN RESOLVE] {mint[:8]} — tx failed on chain: {meta.get('err')}")
+                    return
+                pre  = {t.get("accountIndex"): t.get("uiTokenAmount", {}).get("uiAmount") or 0
+                        for t in (meta.get("preTokenBalances") or [])}
+                for t in (meta.get("postTokenBalances") or []):
+                    if t.get("mint") == mint and t.get("owner") == owner_str:
+                        post_amt = t.get("uiTokenAmount", {}).get("uiAmount") or 0
+                        delta = post_amt - pre.get(t.get("accountIndex"), 0)
+                        if delta > 0:
+                            decimals = t.get("uiTokenAmount", {}).get("decimals", 6)
+                            result["tokens_expected"] = int(delta * (10 ** decimals))
+                            logger.info(
+                                f"[TOKEN RESOLVE] {mint[:8]} — {delta:,.0f} tokens "
+                                f"(from tx receipt, attempt {attempt+1})"
+                            )
+                            return
+            except Exception as e:
+                logger.debug(f"[TOKEN RESOLVE] tx-receipt attempt {attempt+1} failed: {e}")
+
+    # Fallback: poll wallet balance directly
     for attempt in range(retries):
         await asyncio.sleep(delay)
         try:
@@ -42,11 +90,11 @@ async def _resolve_tokens_received(result: dict, mint: str, wallet, retries: int
             if balance > 0:
                 # pump.fun tokens use 6 decimals
                 result["tokens_expected"] = int(balance * 1_000_000)
-                logger.info(f"[TOKEN RESOLVE] {mint[:8]} — {balance:,.0f} tokens confirmed on attempt {attempt+1}")
+                logger.info(f"[TOKEN RESOLVE] {mint[:8]} — {balance:,.0f} tokens (wallet poll, attempt {attempt+1})")
                 return
         except Exception as e:
-            logger.debug(f"[TOKEN RESOLVE] attempt {attempt+1} failed: {e}")
-    logger.warning(f"[TOKEN RESOLVE] {mint[:8]} — could not confirm token balance after {retries} attempts")
+            logger.debug(f"[TOKEN RESOLVE] wallet-poll attempt {attempt+1} failed: {e}")
+    logger.warning(f"[TOKEN RESOLVE] {mint[:8]} — could not confirm token balance after {retries*2} attempts")
 
 
 async def trade_loop(trade_queue, executor, risk_manager, dashboard, wallet):
@@ -255,8 +303,44 @@ def _release_pid_lock():
         pass
 
 
+def _install_global_error_handlers():
+    """Catch silent crashes that bypass the top-level try/except.
+
+    Without this, asyncio task exceptions and thread exceptions die
+    inside the event loop with no traceback, leaving watchdog.log with
+    nothing but `Bot exited (code=1)`. Routes everything through loguru.
+    """
+    def _async_handler(loop, context):
+        exc = context.get("exception")
+        msg = context.get("message", "asyncio error")
+        if exc is not None:
+            logger.opt(exception=exc).critical(f"[ASYNCIO CRASH] {msg}")
+        else:
+            logger.critical(f"[ASYNCIO CRASH] {msg} | context={context}")
+
+    asyncio.get_event_loop().set_exception_handler(_async_handler)
+
+    def _sync_handler(exc_type, exc, tb):
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc, tb)
+            return
+        logger.opt(exception=(exc_type, exc, tb)).critical("[SYS CRASH] uncaught exception")
+    sys.excepthook = _sync_handler
+
+    def _thread_handler(args):
+        if issubclass(args.exc_type, SystemExit):
+            return
+        logger.opt(exception=(args.exc_type, args.exc_value, args.exc_traceback)).critical(
+            f"[THREAD CRASH] {args.thread.name if args.thread else 'unknown'}"
+        )
+    threading.excepthook = _thread_handler
+
+    faulthandler.enable()  # dumps C-level stack on segfault to stderr
+
+
 async def main():
     setup_logging()
+    _install_global_error_handlers()
     _acquire_pid_lock()
 
     logger.info("=" * 60)

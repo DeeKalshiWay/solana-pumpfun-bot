@@ -87,7 +87,7 @@ class PumpPortalExecutor:
                     base64.b64encode(signed_bytes).decode(),
                     {
                         "encoding": "base64",
-                        "skipPreflight": False,
+                        "skipPreflight": True,
                         "preflightCommitment": "processed",
                         "maxRetries": 3,
                     }
