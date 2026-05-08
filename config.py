@@ -167,6 +167,20 @@ STOP_LOSS_PCT               = _env_float("STOP_LOSS_PCT",               15.0)
 EMERGENCY_STOP_DRAWDOWN_PCT = _env_float("EMERGENCY_STOP_DRAWDOWN_PCT", 25.0)
 TIME_EXIT_MINUTES           = _env_int("TIME_EXIT_MINUTES",              5)
 
+# Early-rug detector: if a fresh position drops past EARLY_RUG_PCT within
+# EARLY_RUG_WINDOW_SEC, exit immediately — don't wait for the regular stop-loss
+# check. Trade-DB analysis showed 0-2 min holds had 11-33% WR with stop-losses
+# routinely closing at -25% to -50% due to sell-side slippage during a dump.
+# Faster exit on the first sign of a rug saves the bulk of that slippage.
+EARLY_RUG_PCT        = _env_float("EARLY_RUG_PCT",         5.0)
+EARLY_RUG_WINDOW_SEC = _env_int  ("EARLY_RUG_WINDOW_SEC",  60)
+
+# Creators that produced 2+ consecutive losers in trade history. Block at
+# trade-loop level so we never enter their tokens.
+CREATOR_BLACKLIST = {
+    "ETroz4qu4C6E9HJvYx8G3RjwwhtffSLaBy3yPjYm8THL",  # 4 trades, 0 wins, -0.020 SOL (2026-05-08)
+}
+
 # No-movement exit: if position hasn't moved either direction in N seconds.
 NO_MOVEMENT_EXIT_SECONDS = _env_int("NO_MOVEMENT_EXIT_SECONDS", 90)
 NO_MOVEMENT_BAND_PCT     = _env_float("NO_MOVEMENT_BAND_PCT",   3.0)
@@ -193,7 +207,12 @@ HOLDER_CONCENTRATION_LIMIT_PCT = 70.0
 # ─── EXECUTION SETTINGS ────────────────────────────────────────────────────────
 SLIPPAGE_BPS               = 1500   # 15% — pump.fun tokens need wide slippage
 PRIORITY_FEE_MICROLAMPORTS = 300000 # Jupiter/RPC fee
-PRIORITY_FEE_SOL           = 0.001  # PumpPortal API (total SOL, not per-CU)
+PRIORITY_FEE_SOL           = _env_float("PRIORITY_FEE_SOL",      0.001)
+# Sells during a dump need to land FAST or the price moves further. Stop-loss
+# slippage analysis showed -10% configured stops closing at -25 to -50% because
+# the sell tx was sitting in mempool while the rug deepened. 5x the buy fee
+# pays for priority during high-volatility exits.
+SELL_PRIORITY_FEE_SOL      = _env_float("SELL_PRIORITY_FEE_SOL", 0.005)
 JUPITER_API_URL            = "https://quote-api.jup.ag/v6"
 SOL_MINT                   = "So11111111111111111111111111111111111111112"
 

@@ -16,6 +16,7 @@ from loguru import logger
 from analyzer.counterfactual import counterfactual
 from analyzer.signal_scorer import SignalScorer
 from config import (
+    CREATOR_BLACKLIST,
     MAX_OPEN_POSITIONS,
     MAX_SOL_PER_TRADE,
     MIN_BUY_SCORE,
@@ -107,9 +108,17 @@ async def trade_loop(trade_queue, executor, risk_manager, dashboard, wallet):
         if risk_manager.emergency_stop_active:
             continue
 
-        mint   = token["mint"]
-        symbol = token.get("symbol", "???")
-        score  = token.get("score", 0)
+        mint    = token["mint"]
+        symbol  = token.get("symbol", "???")
+        score   = token.get("score", 0)
+        creator = token.get("creator", "")
+
+        # Block creators that produced repeat losers (see config.CREATOR_BLACKLIST).
+        if creator and creator in CREATOR_BLACKLIST:
+            logger.info(f"[TRADE LOOP] Skip {symbol}: creator {creator[:8]}... is blacklisted")
+            token["reject_reason"] = "creator_blacklisted"
+            dashboard.record_signal(token)
+            continue
 
         sol_amount = await risk_manager.calculate_position_size(score)
         if sol_amount <= 0:

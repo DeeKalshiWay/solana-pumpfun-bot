@@ -14,7 +14,7 @@ from loguru import logger
 from solders.keypair import Keypair
 from solders.transaction import VersionedTransaction
 
-from config import RPC_URL, SLIPPAGE_BPS
+from config import PRIORITY_FEE_SOL, RPC_URL, SELL_PRIORITY_FEE_SOL, SLIPPAGE_BPS
 
 PUMPPORTAL_LOCAL_API = "https://pumpportal.fun/api/trade-local"
 
@@ -38,8 +38,11 @@ class PumpPortalExecutor:
 
     async def _build_tx(self, action: str, mint: str, amount, denominated_in_sol: bool):
         """Request a serialized transaction from PumpPortal."""
-        # PumpPortal expects total priority fee in SOL (not per-CU microlamports)
-        priority_fee_sol = 0.001
+        # PumpPortal expects total priority fee in SOL (not per-CU microlamports).
+        # Sells need higher priority during dumps so the tx lands before the
+        # price moves further; trade-DB analysis showed -10% configured stops
+        # closing at -25-50% because of mempool lag during rugs.
+        priority_fee_sol = SELL_PRIORITY_FEE_SOL if action == "sell" else PRIORITY_FEE_SOL
         # Convert slippage bps to percent (PumpPortal uses percent, not bps)
         slippage_pct = SLIPPAGE_BPS / 100
 

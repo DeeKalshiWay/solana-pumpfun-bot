@@ -31,6 +31,8 @@ from config import (
     ADAPTIVE_SIZING_ENABLED,
     DAILY_LOSS_LIMIT_PCT,
     DAILY_PROFIT_LOCK_PCT,
+    EARLY_RUG_PCT,
+    EARLY_RUG_WINDOW_SEC,
     EMERGENCY_STOP_DRAWDOWN_PCT,
     LOSS_STREAK_LIMIT,
     LOSS_STREAK_PAUSE_MIN,
@@ -436,7 +438,20 @@ class RiskManager:
 
         pnl_pct = pos.pnl_pct
 
-        # ── Hard stop loss (-10%) ─────────────────────────────────────────────
+        # ── Early-rug detector (first EARLY_RUG_WINDOW_SEC seconds) ──────────
+        # Trade-DB analysis (2026-05-08): of 27 stop-losses, 18 fired in the
+        # first 2 minutes and routinely closed at -22% to -53% due to sell
+        # slippage during a dump. Exiting at -EARLY_RUG_PCT (default -5%) the
+        # moment a fresh position turns south escapes the worst of that drop.
+        age_seconds = time.time() - pos.entry_time
+        if age_seconds <= EARLY_RUG_WINDOW_SEC and pnl_pct <= -EARLY_RUG_PCT:
+            logger.warning(
+                f"[EARLY RUG] {pos.symbol} | PnL: {pnl_pct:.1f}% in {age_seconds:.0f}s | Selling 100%"
+            )
+            await self._force_sell(mint, "early_rug")
+            return
+
+        # ── Hard stop loss ───────────────────────────────────────────────────
         if pnl_pct <= -STOP_LOSS_PCT:
             logger.warning(
                 f"[STOP LOSS] {pos.symbol} | PnL: {pnl_pct:.1f}% | Selling 100%"
