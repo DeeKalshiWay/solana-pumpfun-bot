@@ -393,17 +393,30 @@ class RiskManager:
             await asyncio.sleep(3)
 
     async def _check_emergency_stop(self):
-        if self.emergency_stop_active or self.starting_sol_balance == 0:
+        if self.starting_sol_balance == 0:
             return
 
-        current  = await self.wallet.get_sol_balance()
-        drawdown = ((self.starting_sol_balance - current) / self.starting_sol_balance) * 100
+        # Drawdown is on TOTAL EQUITY (liquid SOL + open position market value),
+        # not liquid SOL alone — otherwise a healthy 0.4 SOL position looks like
+        # a 40% loss the moment it's opened.
+        current_sol = await self.wallet.get_sol_balance()
+        held_value  = sum(p.current_price * p.tokens_held for p in self.positions.values())
+        total_equity = current_sol + held_value
+        drawdown = ((self.starting_sol_balance - total_equity) / self.starting_sol_balance) * 100
+
+        # Already tripped: keep retrying force-sells each tick until everything closes.
+        # _force_sell leaves the position open if the sell tx fails, so we'd otherwise
+        # be stuck holding orphans forever.
+        if self.emergency_stop_active:
+            for mint in list(self.positions.keys()):
+                await self._force_sell(mint, "emergency_stop")
+            return
 
         if drawdown >= EMERGENCY_STOP_DRAWDOWN_PCT:
             self.emergency_stop_active = True
             logger.critical(
-                f"EMERGENCY STOP TRIGGERED | "
-                f"Drawdown: {drawdown:.1f}% | Balance: {current:.4f} SOL"
+                f"EMERGENCY STOP TRIGGERED | Drawdown: {drawdown:.1f}% | "
+                f"Equity: {total_equity:.4f} SOL (liquid {current_sol:.4f} + held {held_value:.4f})"
             )
             for mint in list(self.positions.keys()):
                 await self._force_sell(mint, "emergency_stop")
@@ -450,26 +463,38 @@ class RiskManager:
         for tp in TAKE_PROFIT_LEVELS:
             level_id = f"tp_{tp['gain_pct']}"
             if level_id not in pos.tp_levels_hit and pnl_pct >= tp["gain_pct"]:
-                sell_fraction  = tp["sell_pct"] / 100
-                tokens_to_sell = int(pos.tokens_held * sell_fraction)
+                sell_fraction = tp["sell_pct"] / 100
+                if sell_fraction <= 0 or pos.tokens_held <= 0:
+                    continue
 
-                if tokens_to_sell > 0:
-                    logger.success(
-                        f"[TAKE PROFIT] {pos.symbol} +{pnl_pct:.0f}% | "
-                        f"Selling {tp['sell_pct']}% ({tokens_to_sell} tokens)"
-                    )
-                    result = await self.executor.sell(
-                        mint, tokens_to_sell,
-                        reason=f"take_profit_{tp['gain_pct']}pct"
-                    )
-                    if result["success"]:
-                        pos.tokens_held  -= tokens_to_sell
-                        pos.sol_invested *= (1 - sell_fraction)
-                        pos.tp_levels_hit.append(level_id)
+                logger.success(
+                    f"[TAKE PROFIT] {pos.symbol} +{pnl_pct:.0f}% | "
+                    f"Selling {tp['sell_pct']}% of remaining"
+                )
 
-                        if pos.tokens_held <= 0:
-                            self.close_position(mint, result)
-                            return
+                # Pass percentage string — PumpPortal accepts "15%" but 400s on
+                # raw integer token counts for bonding-curve mints.
+                result = await self.executor.sell(
+                    mint, f"{tp['sell_pct']}%",
+                    reason=f"take_profit_{tp['gain_pct']}pct"
+                )
+
+                if not result.get("success"):
+                    logger.warning(
+                        f"[TP SELL FAILED] {pos.symbol} | "
+                        f"error={result.get('error', 'unknown')} | will retry next tick"
+                    )
+                    continue  # don't mark level hit; retry on the next monitor pass
+
+                # Local accounting: PumpPortal sold sell_fraction of the ATA balance,
+                # so reduce our tracked tokens_held + cost basis by the same fraction.
+                pos.tokens_held  = int(pos.tokens_held * (1 - sell_fraction))
+                pos.sol_invested *= (1 - sell_fraction)
+                pos.tp_levels_hit.append(level_id)
+
+                if pos.tokens_held <= 0:
+                    self.close_position(mint, result)
+                    return
 
         # ── No-movement exit (data: dead-after-2min trades almost never recover) ─
         # If position is flat (within ±NO_MOVEMENT_BAND_PCT) for the first
@@ -513,7 +538,24 @@ class RiskManager:
         if not pos or pos.tokens_held <= 0:
             self.positions.pop(mint, None)
             return
-        result = await self.executor.sell(mint, pos.tokens_held, reason=reason)
+
+        # Use percentage string — PumpPortal 400s on raw integer token amounts
+        # for bonding-curve mints. Capture wallet SOL delta to learn what the
+        # sell actually returned (PumpPortal doesn't echo sol_received).
+        sol_before = await self.wallet.get_sol_balance()
+        result = await self.executor.sell(mint, "100%", reason=reason)
+
+        if not result.get("success"):
+            logger.warning(
+                f"[FORCE SELL FAILED] {pos.symbol} ({mint[:8]}) | reason={reason} | "
+                f"error={result.get('error', 'unknown')} | leaving position open for retry"
+            )
+            return
+
+        # Wait a couple seconds for the SOL credit to settle, then capture delta.
+        await asyncio.sleep(2)
+        sol_after = await self.wallet.get_sol_balance()
+        result["sol_received"] = max(0.0, sol_after - sol_before)
         self.close_position(mint, result)
 
     # ── Stats ─────────────────────────────────────────────────────────────────
