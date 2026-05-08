@@ -548,8 +548,7 @@ class RiskManager:
             return
 
         # Use percentage string — PumpPortal 400s on raw integer token amounts
-        # for bonding-curve mints. Capture wallet SOL delta to learn what the
-        # sell actually returned (PumpPortal doesn't echo sol_received).
+        # for bonding-curve mints.
         sol_before = await self.wallet.get_sol_balance()
         result = await self.executor.sell(mint, "100%", reason=reason)
 
@@ -560,15 +559,58 @@ class RiskManager:
             )
             return
 
-        # Wait for the SOL credit to settle on Helius, then capture the delta.
-        # 2s was too short — observed PnL accounting consistently logging
-        # sol_received=0 even when the wallet really did receive SOL. Helius
-        # commitment lag for getBalance after a freshly-confirmed PumpPortal
-        # sell is typically 3-5s.
-        await asyncio.sleep(6)
-        sol_after = await self.wallet.get_sol_balance()
-        result["sol_received"] = max(0.0, sol_after - sol_before)
+        # Compute sol_received from the sell tx receipt directly. Polling
+        # getBalance after a sendTransaction is unreliable on Helius — the
+        # indexer lags 5-15s, so the post-sell read kept returning the
+        # pre-sell value and the bot kept logging sol_received=0 = -100%
+        # PnL on every close. The tx receipt has the exact deltas inline.
+        sol_received = await self._sol_delta_from_tx(result.get("signature"))
+        if sol_received <= 0:
+            # Fallback: poll wallet balance with a longer wait. Logs but
+            # doesn't fail the close — at worst we under-report sol_received.
+            logger.debug(f"[SOL DELTA] tx-receipt parse miss for {mint[:8]}, falling back to poll")
+            await asyncio.sleep(8)
+            sol_after = await self.wallet.get_sol_balance()
+            sol_received = max(0.0, sol_after - sol_before)
+
+        result["sol_received"] = sol_received
         self.close_position(mint, result)
+
+    async def _sol_delta_from_tx(self, sig: str | None) -> float:
+        """Parse the wallet's SOL credit from a confirmed sell tx receipt.
+
+        On-chain source of truth: postBalances[i] - preBalances[i] for our
+        wallet's account index. Avoids the Helius getBalance indexer lag.
+        Retries up to ~10s because the tx may take a moment to be queryable.
+        """
+        if not sig:
+            return 0.0
+        owner = str(self.wallet.pubkey)
+        for attempt in range(7):
+            await asyncio.sleep(1.5)
+            try:
+                resp = await self.wallet._rpc("getTransaction", [
+                    sig,
+                    {"encoding": "jsonParsed",
+                     "maxSupportedTransactionVersion": 0,
+                     "commitment": "confirmed"},
+                ])
+                res = resp.get("result")
+                if not res:
+                    continue
+                meta = res.get("meta") or {}
+                if meta.get("err"):
+                    return 0.0  # tx failed on chain
+                keys = res.get("transaction", {}).get("message", {}).get("accountKeys", [])
+                pre  = meta.get("preBalances", []) or []
+                post = meta.get("postBalances", []) or []
+                for i, k in enumerate(keys):
+                    addr = k.get("pubkey") if isinstance(k, dict) else k
+                    if addr == owner and i < len(pre) and i < len(post):
+                        return max(0.0, (post[i] - pre[i]) / 1e9)
+            except Exception as e:
+                logger.debug(f"[SOL DELTA] attempt {attempt+1} failed: {e}")
+        return 0.0
 
     # ── Stats ─────────────────────────────────────────────────────────────────
     def get_stats(self) -> dict:
