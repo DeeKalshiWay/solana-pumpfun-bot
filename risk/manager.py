@@ -519,7 +519,18 @@ class RiskManager:
         # ── Tier 2: momentum-stall exit ───────────────────────────────────────
         # If we're in profit and price has gone flat for STALL_WINDOW_SEC,
         # sell. Pump.fun pumps are bursts; flat = the pump is over.
-        if MOMENTUM_STALL_ENABLED and pnl_pct >= MOMENTUM_STALL_MIN_PROFIT:
+        # Skip once a position has been in moonshot territory (peak ≥ trailing
+        # moonshot trigger): the wider trailing_stop_moonshot is purpose-built
+        # to ride those, and momentum_stall would clip the +500% tail.
+        peak_pnl_pct = (
+            ((pos.highest_price - pos.entry_price_sol) / pos.entry_price_sol) * 100
+            if pos.entry_price_sol > 0 else 0
+        )
+        if (
+            MOMENTUM_STALL_ENABLED
+            and pnl_pct >= MOMENTUM_STALL_MIN_PROFIT
+            and peak_pnl_pct < TRAILING_STOP_MOONSHOT_TRIGGER
+        ):
             now = time.time()
             window_pts = [p for p in pos.price_history
                           if p[0] >= now - MOMENTUM_STALL_WINDOW_SEC]
