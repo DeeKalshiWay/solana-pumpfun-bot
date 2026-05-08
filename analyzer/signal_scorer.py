@@ -22,6 +22,7 @@ from config import (
     BUY_COOLDOWN_SECONDS,
     DEAD_HOURS_UTC,
     MAX_BONDING_CURVE_PCT,
+    MAX_INITIAL_BUY_SOL,
     MIN_BUY_SCORE,
     NAME_BLACKLIST_SUBSTRINGS,
     SYMBOL_BLACKLIST_EXACT,
@@ -184,6 +185,14 @@ class SignalScorer:
             token["reject_reason"] = "name_blacklist"
             return False
 
+        # Hard filter on creator initial buy. Counterfactual analysis showed
+        # ~91% rug rate for tokens with init buys >= MAX_INITIAL_BUY_SOL.
+        # Reject before scoring even runs — these are bag-dump setups.
+        initial_buy = token.get("initial_buy_sol", 0)
+        if initial_buy >= MAX_INITIAL_BUY_SOL:
+            token["reject_reason"] = f"big_init_buy_{initial_buy:.2f}sol"
+            return False
+
         # Creator hard-blacklist (3+ trades, net negative, WR<25%)
         creator = token.get("creator", "")
         if creator and creator_tracker.is_blacklisted(creator):
@@ -248,11 +257,16 @@ class SignalScorer:
         creator      = token.get("creator", "")
         creator_score = 0
 
-        # Sweet spot 0.5–2 SOL shows commitment without rug flag
-        if   0.5 <= initial_buy <= 2.0:  creator_score += 15
-        elif 0.2 <= initial_buy < 0.5:   creator_score += 10
-        elif 2.0 < initial_buy <= 4.0:   creator_score += 8
-        elif initial_buy < 0.2:          creator_score += 3
+        # INVERTED 2026-05-08 from counterfactual analysis: tokens with creator
+        # initial buys >= 1.5 SOL rugged at ~91% rate; tokens with init buys
+        # < 0.30 SOL produced the bulk of +100% pumps and 100% of moonshots.
+        # Big initial buy = creator bag dump risk. Reward small organic buys.
+        if   initial_buy <  0.10:        creator_score += 15
+        elif initial_buy <  0.30:        creator_score += 12
+        elif initial_buy <  0.60:        creator_score += 8
+        elif initial_buy <  1.00:        creator_score += 4
+        elif initial_buy <  2.00:        creator_score += 2
+        else:                             creator_score -= 5
 
         # Image & metadata quality
         if token.get("image_uri"):        creator_score += 3

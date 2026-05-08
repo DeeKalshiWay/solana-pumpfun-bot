@@ -122,6 +122,13 @@ MIN_BONDING_CURVE_PCT = _env_float("MIN_BONDING_CURVE_PCT", 30.0)
 MAX_BONDING_CURVE_PCT = _env_float("MAX_BONDING_CURVE_PCT", 80.0)
 BUY_COOLDOWN_SECONDS  = _env_int("BUY_COOLDOWN_SECONDS",  15)
 
+# Counterfactual analysis (2026-05-08): tokens with creator initial buys
+# >= 1.5 SOL rugged at ~91% rate within 10 min, while tokens with init buys
+# < 0.30 SOL produced the bulk of the +100% pumps and 100% of the
+# moonshots in the rejected sample. Big initial buy = creator bag dump risk.
+# Hard filter at this threshold; the scoring also inverts to reward small.
+MAX_INITIAL_BUY_SOL   = _env_float("MAX_INITIAL_BUY_SOL",  1.5)
+
 # ─── CREATOR TRACKING (Dexter strategy) ───────────────────────────────────────
 CREATOR_TRACKING_ENABLED = _env_bool("CREATOR_TRACKING_ENABLED", True)
 CREATOR_TOP_N            = _env_int("CREATOR_TOP_N",            50)
