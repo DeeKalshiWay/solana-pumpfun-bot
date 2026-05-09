@@ -123,18 +123,21 @@ class CreatorTracker:
 
     def is_blacklisted(self, creator: str) -> bool:
         """
-        Hard-reject creator if our own trades on their tokens have demonstrated
-        a real edge against us: 3+ closed trades, net negative SOL, win rate <25%.
+        Hard-reject creator if our own trades on their tokens have lost money.
+        Pump.fun creators are mostly one-and-done — waiting for 3+ trades on
+        the same wallet is unrealistic; the cost of being wrong (skip a few
+        legit launches) is far less than the cost of being right (avoid another
+        rug from a wallet we already know burned us).
+
+        Threshold: ≥1 closed trade and net loss > 0.001 SOL (excludes pure
+        friction/dust closes where pnl might be slightly negative but the
+        creator wasn't actually adverse).
         """
         s = self._db.get(creator, {})
-        wins   = s.get("wins", 0)
-        losses = s.get("losses", 0)
-        total  = wins + losses
-        if total < 3:
+        total = s.get("wins", 0) + s.get("losses", 0)
+        if total < 1:
             return False
-        pnl = s.get("total_pnl_sol", 0.0)
-        wr  = wins / total
-        return pnl < 0 and wr < 0.25
+        return s.get("total_pnl_sol", 0.0) < -0.001
 
     def _get_rank(self, creator: str) -> int | None:
         """Return 1-based rank of creator in top-N list, or None."""

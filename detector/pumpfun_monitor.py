@@ -41,6 +41,10 @@ _WS_HEADERS = [
 ]
 
 
+TRADE_SUB_DURATION_S = 6   # how long to keep trade-events flowing per new mint
+                            # (slightly > BUNDLE_WINDOW_S=4 in wallet_intel for slack)
+
+
 class PumpFunMonitor:
     def __init__(self, token_queue: asyncio.Queue):
         self.queue       = token_queue
@@ -52,6 +56,12 @@ class PumpFunMonitor:
         self._create_subs: list[Callable[[dict], None]] = []
         self._trade_subs:  list[Callable[[dict], None]] = []
 
+        # Live WS handle so we can send subscribeTokenTrade messages from
+        # within event callbacks. Reset on reconnect.
+        self._ws = None
+        # Mints we've actively subscribed to trades for, to avoid duplicate subs
+        self._trade_subbed: set[str] = set()
+
     # ── Public pub/sub API ────────────────────────────────────────────────────
     def subscribe_create(self, fn: Callable[[dict], None]):
         """Register a callback for create events. Called for every new token."""
@@ -60,6 +70,39 @@ class PumpFunMonitor:
     def subscribe_trade(self, fn: Callable[[dict], None]):
         """Register a callback for buy/sell events on subscribed mints."""
         self._trade_subs.append(fn)
+
+    async def _subscribe_mint_trades(self, mint: str):
+        """
+        Tell PumpPortal we want trade events for this mint, then auto-unsub
+        after TRADE_SUB_DURATION_S so we don't accumulate subscriptions
+        forever. Used by the bundle/bot-buyer detector to see who buys
+        in the first ~4 seconds after launch.
+        """
+        if self._ws is None or mint in self._trade_subbed:
+            return
+        self._trade_subbed.add(mint)
+        try:
+            await self._ws.send(json.dumps({
+                "method": "subscribeTokenTrade",
+                "keys":   [mint],
+            }))
+        except Exception as e:
+            logger.debug(f"subscribeTokenTrade send error: {e}")
+            self._trade_subbed.discard(mint)
+            return
+
+        await asyncio.sleep(TRADE_SUB_DURATION_S)
+
+        # Window done — unsubscribe to keep the WS load bounded.
+        self._trade_subbed.discard(mint)
+        if self._ws is not None:
+            try:
+                await self._ws.send(json.dumps({
+                    "method": "unsubscribeTokenTrade",
+                    "keys":   [mint],
+                }))
+            except Exception as e:
+                logger.debug(f"unsubscribeTokenTrade send error: {e}")
 
     # ── Lifecycle ─────────────────────────────────────────────────────────────
     async def run(self):
@@ -80,6 +123,7 @@ class PumpFunMonitor:
                     ping_timeout=10,
                     additional_headers=_WS_HEADERS,
                 ) as ws:
+                    self._ws = ws
                     await ws.send(json.dumps({"method": "subscribeNewToken"}))
                     logger.info(
                         f"PumpPortal WS subscribed | create_subs={len(self._create_subs)} "
@@ -94,6 +138,8 @@ class PumpFunMonitor:
                             await self._handle_message(raw)
                         except Exception as e:
                             logger.debug(f"WS msg error: {e}")
+                    self._ws = None
+                    self._trade_subbed.clear()
 
             except websockets.exceptions.ConnectionClosed:
                 logger.warning(f"PumpPortal WS disconnected, reconnecting in {backoff}s...")
@@ -105,6 +151,7 @@ class PumpFunMonitor:
                     async with websockets.connect(
                         PUMPPORTAL_WS, ping_interval=20, ping_timeout=10
                     ) as ws:
+                        self._ws = ws
                         await ws.send(json.dumps({"method": "subscribeNewToken"}))
                         backoff = 5
                         async for raw in ws:
@@ -114,6 +161,8 @@ class PumpFunMonitor:
                                 await self._handle_message(raw)
                             except Exception:
                                 pass
+                        self._ws = None
+                        self._trade_subbed.clear()
                 except Exception as e:
                     logger.error(f"PumpPortal WS fallback error: {e}")
                     await asyncio.sleep(backoff)
@@ -166,6 +215,12 @@ class PumpFunMonitor:
                 fn(data)
             except Exception as e:
                 logger.debug(f"create sub error: {e}")
+
+        # Open a short trade-event window for this mint so the bundle/bot-buyer
+        # detector can see who else jumps in. Without this PumpPortal only sends
+        # us create events — buys are silent — and the bundle detector stays dead.
+        # Fire-and-forget; the helper unsubscribes itself after TRADE_SUB_DURATION_S.
+        asyncio.create_task(self._subscribe_mint_trades(mint))
 
         initial_buy    = float(data.get("solAmount", 0))
         market_cap_sol = float(data.get("marketCapSol", 0))
