@@ -28,6 +28,11 @@ class PumpPortalExecutor:
         self.keypair = keypair
         self.pubkey  = keypair.pubkey()
         self.session = None
+        # Per-mint cache of how much SOL was spent on the buy. Used to scale
+        # the sell priority fee so it never exceeds ~5% of position value.
+        # Without this, a 0.005 SOL priority fee on a 0.007 SOL position is
+        # 71% drag — fees alone burn the trade.
+        self._buy_size_for_mint: dict[str, float] = {}
 
     async def start(self):
         self.session = aiohttp.ClientSession()
@@ -39,10 +44,21 @@ class PumpPortalExecutor:
     async def _build_tx(self, action: str, mint: str, amount, denominated_in_sol: bool):
         """Request a serialized transaction from PumpPortal."""
         # PumpPortal expects total priority fee in SOL (not per-CU microlamports).
-        # Sells need higher priority during dumps so the tx lands before the
-        # price moves further; trade-DB analysis showed -10% configured stops
-        # closing at -25-50% because of mempool lag during rugs.
-        priority_fee_sol = SELL_PRIORITY_FEE_SOL if action == "sell" else PRIORITY_FEE_SOL
+        # Sells need higher priority during dumps; but at small trade sizes a
+        # fixed 0.005 SOL fee becomes 50-70% drag. Scale it so it's always at
+        # most ~5% of position value. For buys, position value = sol_amount.
+        # For sells, look up the cached buy size for this mint.
+        if action == "sell":
+            position_value = self._buy_size_for_mint.get(mint, 0)
+            if position_value > 0:
+                priority_fee_sol = min(SELL_PRIORITY_FEE_SOL, position_value * 0.05)
+            else:
+                # No cached buy size (e.g. dump_orphans script with stale ATA);
+                # fall back to a conservative cap so we don't burn an orphan.
+                priority_fee_sol = min(SELL_PRIORITY_FEE_SOL, 0.001)
+        else:  # buy
+            sol_amount = amount if denominated_in_sol else 0
+            priority_fee_sol = min(PRIORITY_FEE_SOL, max(sol_amount * 0.05, 0.0005))
         # Convert slippage bps to percent (PumpPortal uses percent, not bps)
         slippage_pct = SLIPPAGE_BPS / 100
 
@@ -165,6 +181,8 @@ class PumpPortalExecutor:
         }
 
         if confirmed:
+            # Cache buy size so the matching sell can scale its priority fee.
+            self._buy_size_for_mint[token_mint] = sol_amount
             logger.success(f"[PP BUY CONFIRMED] {token_mint[:8]} | {sol_amount} SOL | sig: {sig[:20]}")
         else:
             result["error"] = "unconfirmed"
