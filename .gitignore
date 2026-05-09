@@ -8,6 +8,11 @@
 .env.*
 !.env.example
 
+# Telethon session files — contain Telegram auth tokens. Anyone with
+# these can impersonate the bot/user session on Telegram.
+*.session
+*.session-journal
+
 # ════════════════════════════════════════════════════════════════════
 # Bot state and operational logs (not secret but personal/large/noise)
 # ════════════════════════════════════════════════════════════════════
