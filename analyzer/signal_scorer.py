@@ -17,6 +17,7 @@ import time
 import aiohttp
 from loguru import logger
 
+from analyzer.auto_tuner import auto_tuner
 from analyzer.counterfactual import counterfactual
 from analyzer.rug_memory import rug_memory
 from config import (
@@ -164,8 +165,9 @@ class SignalScorer:
                 counterfactual.record_rejection(token, token.get('reject_reason', 'hard_filter'))
                 return
 
-            # Score threshold
-            if score < MIN_BUY_SCORE:
+            # Score threshold (dynamic — auto_tuner shifts it on rolling WR)
+            min_score = auto_tuner.effective_min_score()
+            if score < min_score:
                 token["reject_reason"] = f"score_{score}"
                 # Bin by score band, not exact score, so aggregation is meaningful
                 band = (score // 10) * 10
@@ -173,7 +175,7 @@ class SignalScorer:
 
                 # Smart Caller: borderline rejections (just below threshold)
                 # get queued for manual review by the control bot.
-                if SMART_CALLER_MIN <= score < MIN_BUY_SCORE:
+                if SMART_CALLER_MIN <= score < min_score:
                     try:
                         with open("logs/candidate_queue.jsonl", "a", encoding="utf-8") as f:
                             f.write(json.dumps({

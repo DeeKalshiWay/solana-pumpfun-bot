@@ -20,6 +20,7 @@ import time
 from aiohttp import web
 from loguru import logger
 
+from analyzer.auto_tuner import auto_tuner
 from analyzer.counterfactual import counterfactual
 from analyzer.score_bins import aggregate_by_score
 from detector.creator_tracker import creator_tracker
@@ -107,6 +108,7 @@ class WebDashboard:
             "pause_reason":    stats.get("pause_reason", ""),
             "consecutive_losses": stats.get("consecutive_losses", 0),
             "scored_count":    self.scorer.scored_count,
+            "auto_tuner":      auto_tuner.stats(),
         })
 
     async def api_positions(self, request):

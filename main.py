@@ -13,6 +13,7 @@ import threading
 import aiohttp
 from loguru import logger
 
+from analyzer.auto_tuner import auto_tuner
 from analyzer.counterfactual import counterfactual
 from analyzer.signal_scorer import SignalScorer
 from config import (
@@ -457,6 +458,8 @@ async def main():
     pumpfun_tracker  = PumpFunTracker(monitor=pumpfun_monitor)
     # Wallet intel attaches before monitor.run() so it sees every event.
     wallet_intel.attach(pumpfun_monitor)
+    # Auto-tuner needs the live risk_manager to read closed_trades.
+    auto_tuner.attach(risk_mgr)
     trending_scanner = TrendingScanner(raw_queue)
     social_monitor   = SocialMonitor()
 
@@ -488,6 +491,7 @@ async def main():
         asyncio.create_task(web_dash.run(),                                                 name="web"),
         asyncio.create_task(reporter.run(),                                                 name="report"),
         asyncio.create_task(counterfactual.run(),                                           name="counterfactual"),
+        asyncio.create_task(auto_tuner.run(),                                               name="auto_tuner"),
     ]
 
     logger.success("All systems GO — bot is live")
@@ -504,6 +508,7 @@ async def main():
     wallet_intel.stop()
     influencer_monitor.stop()
     counterfactual.stop()
+    auto_tuner.stop()
     risk_mgr.stop()
     await social_monitor.stop()
 
