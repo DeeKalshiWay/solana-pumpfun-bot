@@ -25,6 +25,7 @@ from config import (
     MAX_INITIAL_BUY_SOL,
     MIN_BUY_SCORE,
     NAME_BLACKLIST_SUBSTRINGS,
+    RPC_URL,
     SYMBOL_BLACKLIST_EXACT,
 )
 from detector.creator_tracker import creator_tracker
@@ -158,11 +159,46 @@ class SignalScorer:
                     counterfactual.record_rejection(token, "top10_concentration")
                     return
 
+                # Freeze-authority sensor: if non-null, the creator (or whoever
+                # holds it) can freeze your token account post-buy — locking
+                # you out of selling. Pump.fun mints typically have null freeze
+                # authority; anything else is a clear rug-vector.
+                if not await self._freeze_authority_safe(mint):
+                    token["reject_reason"] = "freeze_authority_set"
+                    logger.debug(f"[FILTERED] {symbol}: freeze authority set")
+                    counterfactual.record_rejection(token, "freeze_authority_set")
+                    return
+
             logger.success(f"[BUY SIGNAL] {symbol} scored {score}/100 — queuing")
             await self.trade_queue.put(token)
 
         except Exception as e:
             logger.error(f"Score error for {mint[:8]}: {e}")
+
+    async def _freeze_authority_safe(self, mint: str) -> bool:
+        """Returns True if the token's freeze authority is null (safe).
+
+        Pump.fun mints normally have a null freeze authority. If it's set,
+        whoever holds it can freeze your associated token account after the
+        buy lands — preventing you from selling. Classic honeypot rug vector.
+        Fail-open on RPC errors so a flaky RPC doesn't shut down trading.
+        """
+        try:
+            payload = {
+                "jsonrpc": "2.0", "id": 1, "method": "getAccountInfo",
+                "params": [mint, {"encoding": "jsonParsed", "commitment": "confirmed"}],
+            }
+            async with self._rpc_session.post(
+                RPC_URL, json=payload, timeout=aiohttp.ClientTimeout(total=4)
+            ) as r:
+                data = await r.json()
+            val = (data.get("result") or {}).get("value")
+            if not val:
+                return True  # account not visible yet — let it through
+            info = ((val.get("data") or {}).get("parsed") or {}).get("info") or {}
+            return info.get("freezeAuthority") in (None, "")
+        except Exception:
+            return True  # fail-open on RPC errors
 
     # ── Hard Filters ──────────────────────────────────────────────────────────
     def _passes_hard_filters(self, token: dict) -> bool:
@@ -244,6 +280,18 @@ class SignalScorer:
         if price_change_5m < -30:
             token["reject_reason"] = f"dumping_{price_change_5m:.0f}pct"
             return False
+
+        # Early-spike sensor: vertical pump on a fresh token = sniper-bot pattern.
+        # Tracker reports mc_growth_pct between 2s polls. >80% growth in a 2s
+        # window for a token under 60s old = thin pump, almost always followed
+        # by a dump as the bots cycle out. Rejects the "pump room" pattern.
+        pf = get_pumpfun_state(token.get("mint", ""))
+        if pf:
+            age_s = pf.get("tracker_age_s", 0)
+            growth = pf.get("mc_growth_pct", 0)
+            if 0 < age_s < 60 and growth > 80:
+                token["reject_reason"] = f"early_spike_{growth:.0f}pct_in_{age_s:.0f}s"
+                return False
 
         return True
 
