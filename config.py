@@ -80,7 +80,23 @@ DEX_POLL_INTERVAL     = 5
 MIN_LIQUIDITY_SOL     = 0       # PumpPortal trades bonding-curve tokens directly
 MAX_TOKEN_AGE_MINUTES = 20
 
-TELEGRAM_CHANNELS = []
+# Telegram channels to monitor for token calls. Provide as JSON list in .env:
+#   TELEGRAM_CHANNELS=["@channel1","@channel2","@private_chat_invite_hash"]
+# Public channels: use @username form. Private: use the t.me/+HASH portion.
+def _load_telegram_channels() -> list:
+    raw = os.getenv("TELEGRAM_CHANNELS", "").strip()
+    if not raw:
+        return []
+    try:
+        import json as _json
+        v = _json.loads(raw)
+        return list(v) if isinstance(v, list) else []
+    except Exception:
+        # Comma-separated fallback for "@a,@b" style values
+        return [s.strip() for s in raw.split(",") if s.strip()]
+
+
+TELEGRAM_CHANNELS = _load_telegram_channels()
 TWITTER_KEYWORDS  = []
 
 # ─── PUMP.FUN COMMENT/METADATA TRACKER ─────────────────────────────────────────
