@@ -79,6 +79,13 @@ class Position:
     # without re-fetching state we already had at open.
     init_buy_sol:      float = 0
     bonding_curve_pct: float = 0
+    # Pre-built sell-100% tx (bytes) populated async right after buy. Lets us
+    # skip the PumpPortal _build_tx call (~200-500ms) on emergency exits like
+    # early-rug and stop-loss. Solana blockhashes expire after ~150 slots
+    # (~60s), so the prebuilt is only valid for fast exits — past that we
+    # fall back to building fresh.
+    prebuilt_sell_tx:    bytes | None = None
+    prebuilt_sell_ts:    float = 0
     # Rolling (timestamp, pnl_pct) tuples for momentum-stall detection.
     price_history:   list  = field(default_factory=list)
 
@@ -610,10 +617,18 @@ class RiskManager:
             self.positions.pop(mint, None)
             return
 
+        # Pre-built sell tx fast-path: if we cached one within the last ~50s,
+        # use it — Solana blockhashes expire ~150 slots (~60s), so 50s is the
+        # safe staleness limit. Saves ~200-500ms on the time-critical exit
+        # path. Stale prebuilt is dropped and we fall back to building fresh.
+        prebuilt = None
+        if pos.prebuilt_sell_tx and (time.time() - pos.prebuilt_sell_ts) < 50:
+            prebuilt = pos.prebuilt_sell_tx
+
         # Use percentage string — PumpPortal 400s on raw integer token amounts
         # for bonding-curve mints.
         sol_before = await self.wallet.get_sol_balance()
-        result = await self.executor.sell(mint, "100%", reason=reason)
+        result = await self.executor.sell(mint, "100%", reason=reason, prebuilt_tx=prebuilt)
 
         if not result.get("success"):
             logger.warning(

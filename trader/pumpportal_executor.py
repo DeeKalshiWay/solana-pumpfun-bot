@@ -189,19 +189,47 @@ class PumpPortalExecutor:
             logger.warning(f"[PP BUY UNCONFIRMED] {token_mint[:8]} | sig: {sig[:20]}")
         return result
 
+    async def prebuild_sell_tx(self, token_mint: str) -> bytes | None:
+        """
+        Public entry to pre-construct a sell-100% tx. Called by main right after
+        a buy confirms so the bytes are sitting in memory waiting for any
+        emergency exit (rug, stop-loss). The caller stashes the result on the
+        Position; risk_manager passes it back to .sell() to skip _build_tx.
+        Returns None on failure — caller falls back to normal sell path.
+        """
+        try:
+            return await self._build_tx("sell", token_mint, "100%", False)
+        except Exception as e:
+            logger.debug(f"[PP PREBUILD] {token_mint[:8]} failed: {e}")
+            return None
+
     # ── Sell ──────────────────────────────────────────────────────────────────
-    async def sell(self, token_mint: str, token_amount_or_pct, reason: str = "exit") -> dict:
+    async def sell(
+        self,
+        token_mint: str,
+        token_amount_or_pct,
+        reason: str = "exit",
+        prebuilt_tx: bytes | None = None,
+    ) -> dict:
         """
         token_amount_or_pct: either a raw token count (int) or a percentage string like "100%"
+
+        prebuilt_tx: optional pre-built tx bytes (from a prior _build_tx call).
+        When provided, skips the PumpPortal API roundtrip — used by risk_manager
+        for emergency exits where the ~200-500ms _build_tx call matters.
+        Solana blockhashes expire ~60s, so caller is responsible for freshness.
         """
-        logger.info(f"[PP SELL] {token_mint[:8]}... | reason={reason}")
+        logger.info(f"[PP SELL] {token_mint[:8]}... | reason={reason}{' (prebuilt)' if prebuilt_tx else ''}")
 
         # For sells we can use percentage strings (PumpPortal supports "100%")
         # If we got an int, pass as token count
         amount = token_amount_or_pct
         denominated_in_sol = False  # selling is always token-denominated
 
-        tx_bytes = await self._build_tx("sell", token_mint, amount, denominated_in_sol)
+        if prebuilt_tx is not None:
+            tx_bytes = prebuilt_tx
+        else:
+            tx_bytes = await self._build_tx("sell", token_mint, amount, denominated_in_sol)
         if not tx_bytes:
             return {"success": False, "error": "pp_build_failed", "reason": reason}
 

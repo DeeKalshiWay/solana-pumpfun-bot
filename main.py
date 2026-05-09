@@ -9,6 +9,7 @@ import faulthandler
 import signal
 import sys
 import threading
+import time
 
 import aiohttp
 from loguru import logger
@@ -99,6 +100,25 @@ async def _resolve_tokens_received(result: dict, mint: str, wallet, retries: int
     logger.warning(f"[TOKEN RESOLVE] {mint[:8]} — could not confirm token balance after {retries*2} attempts")
 
 
+async def _prebuild_sell_for_position(executor, risk_manager, mint: str):
+    """
+    Background task: pre-build the sell-100% tx for a freshly-opened position
+    and stash it on the Position. Lets emergency exits (rug, stop-loss) skip
+    the PumpPortal _build_tx call (~200-500ms saved on the time-critical path).
+    Solana blockhashes expire after ~60s, so risk_manager checks staleness
+    before using the bytes.
+    """
+    try:
+        tx_bytes = await executor.prebuild_sell_tx(mint)
+        pos = risk_manager.positions.get(mint)
+        if pos is not None and tx_bytes:
+            pos.prebuilt_sell_tx = tx_bytes
+            pos.prebuilt_sell_ts = time.time()
+            logger.debug(f"[PREBUILD] sell-100% cached for {mint[:8]}... ({len(tx_bytes)} bytes)")
+    except Exception as e:
+        logger.debug(f"[PREBUILD] failed for {mint[:8]}: {e}")
+
+
 async def trade_loop(trade_queue, executor, risk_manager, dashboard, wallet):
     while True:
         try:
@@ -138,6 +158,11 @@ async def trade_loop(trade_queue, executor, risk_manager, dashboard, wallet):
             if result.get("tokens_expected", 0) > 0:
                 risk_manager.open_position(token, result)
                 token["queued_for_buy"] = True
+                # Pre-build the sell-100% tx async so an emergency exit
+                # (rug, stop-loss) can skip the PumpPortal _build_tx
+                # roundtrip (~200-500ms). The blockhash inside expires
+                # after ~60s; risk_manager checks freshness before use.
+                asyncio.create_task(_prebuild_sell_for_position(executor, risk_manager, mint))
             else:
                 logger.warning(f"[TRADE LOOP] {symbol} buy confirmed but tokens unresolved — position skipped")
                 token["reject_reason"] = "tokens_unresolved"

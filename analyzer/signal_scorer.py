@@ -82,6 +82,15 @@ class SignalScorer:
             if BUY_COOLDOWN_SECONDS > 0:
                 await asyncio.sleep(BUY_COOLDOWN_SECONDS)
 
+            # ── Parallel I/O: kick off DEX enrichment NOW so it runs alongside
+            # the bundle wait (~5s blocking) instead of stacking serially after.
+            # Saves up to ~1s per token on busy mints.
+            age_min = token.get("age_minutes", 99)
+            dex_task = (
+                asyncio.create_task(self.dex.enrich_token(token))
+                if age_min > 0.5 else None
+            )
+
             # Tier 4: if the bundle observer is still watching this mint
             # (4s window after creation), wait for its decision.
             waited = 0
@@ -89,15 +98,18 @@ class SignalScorer:
                 await asyncio.sleep(0.5)
                 waited += 0.5
 
-            # Record creator launch for tracking
+            # Record creator launch for tracking (cheap, in-memory)
             creator = token.get("creator", "")
             if creator:
                 creator_tracker.record_launch(creator)
 
-            # Enrich with DEX data if token is not brand-new
-            age_min = token.get("age_minutes", 99)
-            if age_min > 0.5:
-                token = await self.dex.enrich_token(token)
+            # Pull DEX result now — it's been running in parallel during the
+            # bundle wait above, so this typically returns immediately.
+            if dex_task is not None:
+                try:
+                    token = await dex_task
+                except Exception as e:
+                    logger.debug(f"[SCORE] dex enrich failed for {symbol}: {e}")
 
             social = get_social_stats(mint)
             token.update(social)
