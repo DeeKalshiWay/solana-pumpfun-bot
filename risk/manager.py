@@ -97,6 +97,10 @@ class RiskManager:
         self.starting_sol_balance    = 0
         self.running                 = False
         self.emergency_stop_active   = False
+        # Separate flag: only the auto-drawdown trigger sets this to also
+        # force-sell. The manual dashboard button sets emergency_stop_active
+        # alone — buys are blocked but open positions exit naturally on TP/SL.
+        self.emergency_force_sell    = False
 
         # ── Tier 2 circuit breakers ─────────────────────────────────────────
         self.consecutive_losses     = 0
@@ -424,16 +428,17 @@ class RiskManager:
         total_equity = current_sol + held_value
         drawdown = ((self.starting_sol_balance - total_equity) / self.starting_sol_balance) * 100
 
-        # Already tripped: keep retrying force-sells each tick until everything closes.
-        # _force_sell leaves the position open if the sell tx fails, so we'd otherwise
-        # be stuck holding orphans forever.
-        if self.emergency_stop_active:
+        # Already tripped via auto-drawdown: keep retrying force-sells each tick
+        # until everything closes. Manual dashboard stop sets emergency_stop_active
+        # alone, NOT emergency_force_sell — open positions exit naturally on TP/SL.
+        if self.emergency_force_sell:
             for mint in list(self.positions.keys()):
                 await self._force_sell(mint, "emergency_stop")
             return
 
         if drawdown >= EMERGENCY_STOP_DRAWDOWN_PCT:
             self.emergency_stop_active = True
+            self.emergency_force_sell  = True
             logger.critical(
                 f"EMERGENCY STOP TRIGGERED | Drawdown: {drawdown:.1f}% | "
                 f"Equity: {total_equity:.4f} SOL (liquid {current_sol:.4f} + held {held_value:.4f})"

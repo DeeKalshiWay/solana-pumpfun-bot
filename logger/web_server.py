@@ -201,6 +201,38 @@ class WebDashboard:
             "pending_resolutions": len(counterfactual._pending),
         })
 
+    # ── Control endpoints (POST) ──────────────────────────────────────────────
+    async def api_emergency_stop(self, request):
+        """
+        Big red button. Forces emergency_stop_active = True so:
+          - calculate_position_size returns 0 → no new buys
+          - _check_emergency_stop loop force-sells every open position
+        Body: {"confirm": true}  (defensive against stray GETs / random hits)
+        """
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        if not body.get("confirm"):
+            return web.json_response({"ok": False, "error": "missing confirm"}, status=400)
+        self.risk_mgr.emergency_stop_active = True
+        logger.critical("[DASHBOARD] EMERGENCY STOP triggered via web UI — force-selling all positions")
+        return web.json_response({"ok": True, "emergency_stop": True})
+
+    async def api_emergency_resume(self, request):
+        """Clear the emergency stop. Body: {"confirm": true}"""
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        if not body.get("confirm"):
+            return web.json_response({"ok": False, "error": "missing confirm"}, status=400)
+        self.risk_mgr.emergency_stop_active = False
+        # Also clear force-sell in case auto-drawdown trigger had set it
+        self.risk_mgr.emergency_force_sell = False
+        logger.warning("[DASHBOARD] Emergency stop cleared via web UI — trading resumed")
+        return web.json_response({"ok": True, "emergency_stop": False})
+
     async def api_report(self, request):
         """Return all snapshots + a verdict for the dashboard chart."""
         if not self.report_logger:
@@ -242,6 +274,8 @@ class WebDashboard:
         app.router.add_get("/api/intel",     self.api_intel)
         app.router.add_get("/api/learn",     self.api_learn)
         app.router.add_get("/api/report",    self.api_report)
+        app.router.add_post("/api/emergency_stop",   self.api_emergency_stop)
+        app.router.add_post("/api/emergency_resume", self.api_emergency_resume)
 
         self._runner = web.AppRunner(app)
         await self._runner.setup()
