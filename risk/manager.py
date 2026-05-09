@@ -55,6 +55,7 @@ from config import (
     TRAILING_STOP_MOONSHOT_TRIGGER,
     TRAILING_STOP_PCT,
 )
+from analyzer.rug_memory import RUG_PNL_THRESHOLD, rug_memory
 from detector.creator_tracker import creator_tracker
 from logger.telegram_alerts import send_alert
 from logger.trade_db import get_trade_db
@@ -74,6 +75,10 @@ class Position:
     highest_price:   float = 0
     tp_levels_hit:   list  = field(default_factory=list)
     score:           int   = 0
+    # Snapshot of features at entry — needed at close to feed rug_memory
+    # without re-fetching state we already had at open.
+    init_buy_sol:      float = 0
+    bonding_curve_pct: float = 0
     # Rolling (timestamp, pnl_pct) tuples for momentum-stall detection.
     price_history:   list  = field(default_factory=list)
 
@@ -310,16 +315,18 @@ class RiskManager:
         creator      = token.get("creator", "")
 
         pos = Position(
-            mint            = mint,
-            symbol          = symbol,
-            creator         = creator,
-            entry_price_sol = entry_price,
-            entry_time      = time.time(),
-            sol_invested    = sol_spent,
-            tokens_held     = tokens_received,
-            current_price   = entry_price,
-            highest_price   = entry_price,
-            score           = token.get("score", 0),
+            mint              = mint,
+            symbol            = symbol,
+            creator           = creator,
+            entry_price_sol   = entry_price,
+            entry_time        = time.time(),
+            sol_invested      = sol_spent,
+            tokens_held       = tokens_received,
+            current_price     = entry_price,
+            highest_price     = entry_price,
+            score             = token.get("score", 0),
+            init_buy_sol      = float(token.get("initial_buy_sol", 0) or 0),
+            bonding_curve_pct = float(token.get("bonding_curve_pct", 0) or 0),
         )
 
         self.positions[mint] = pos
@@ -356,6 +363,21 @@ class RiskManager:
         # Feed result back into creator tracker for leaderboard
         if pos.creator:
             creator_tracker.record_trade_result(pos.creator, pnl_sol)
+
+        # Rug-pattern memory: if this trade rugged, record its fingerprint
+        # so future candidates with the same pattern get docked at scoring.
+        if pos.pnl_pct <= RUG_PNL_THRESHOLD:
+            rug_memory.record_rug(
+                token_features = {
+                    "initial_buy_sol":   pos.init_buy_sol,
+                    "bonding_curve_pct": pos.bonding_curve_pct,
+                    "score":             pos.score,
+                },
+                pnl_pct       = pos.pnl_pct,
+                hold_minutes  = pos.age_minutes,
+                mint          = mint,
+                symbol        = pos.symbol,
+            )
 
         # Tier 2: loss-streak circuit breaker
         if pnl_sol <= 0:

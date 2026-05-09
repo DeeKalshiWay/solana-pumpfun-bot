@@ -30,11 +30,13 @@ from loguru import logger
 
 BOT_WALLET_FILE       = "logs/bot_wallets.json"
 BUNDLE_LAUNCH_FILE    = "logs/bundled_launches.json"
+BOT_BUYER_MINTS_FILE  = "logs/bot_buyer_mints.json"
 
 # Thresholds
 BOT_WALLET_THRESHOLD  = 50     # mints bought to qualify as a bot
 BUNDLE_WINDOW_S       = 4      # seconds after create to look for bundle
 BUNDLE_BUYER_LIMIT    = 2      # 2+ non-creator buyers in window = bundled
+BOT_BUYER_MINTS_CAP   = 5000   # ring-buffer size; rugs are old data after a while
 
 
 class WalletIntel:
@@ -54,6 +56,11 @@ class WalletIntel:
 
         # Snapshot of finalized bundle decisions: mint -> True/False
         self._bundle_decided: dict[str, bool] = {}
+
+        # Mints where a known bot wallet was among the early buyers (any count,
+        # not just bundles). Used to reject sniper-targeted launches even when
+        # only one bot showed up — bundle threshold is too coarse.
+        self._bot_buyer_mints: dict[str, bool] = {}
 
         # Mints we are still in the bundle observation window for
         self._observing: set[str] = set()
@@ -77,6 +84,13 @@ class WalletIntel:
                 logger.info(f"[WALLET-INTEL] Loaded {len(self._bundle_decided)} bundle decisions")
             except Exception as e:
                 logger.warning(f"[WALLET-INTEL] Could not load bundles: {e}")
+        if os.path.exists(BOT_BUYER_MINTS_FILE):
+            try:
+                with open(BOT_BUYER_MINTS_FILE, encoding="utf-8") as f:
+                    self._bot_buyer_mints = json.load(f)
+                logger.info(f"[WALLET-INTEL] Loaded {len(self._bot_buyer_mints)} bot-buyer mint flags")
+            except Exception as e:
+                logger.warning(f"[WALLET-INTEL] Could not load bot-buyer mints: {e}")
 
     def _atomic_write(self, path: str, data):
         tmp = path + ".tmp"
@@ -97,6 +111,13 @@ class WalletIntel:
     def _save_bundles(self):
         self._atomic_write(BUNDLE_LAUNCH_FILE, self._bundle_decided)
 
+    def _save_bot_buyer_mints(self):
+        # Trim to ring-buffer cap so the file doesn't grow forever
+        if len(self._bot_buyer_mints) > BOT_BUYER_MINTS_CAP:
+            keys = list(self._bot_buyer_mints.keys())[-BOT_BUYER_MINTS_CAP:]
+            self._bot_buyer_mints = {k: self._bot_buyer_mints[k] for k in keys}
+        self._atomic_write(BOT_BUYER_MINTS_FILE, self._bot_buyer_mints)
+
     # ── Public query API ─────────────────────────────────────────────────────
     def is_bot_wallet(self, addr: str) -> bool:
         if not addr:
@@ -110,6 +131,14 @@ class WalletIntel:
     def is_bundled_launch(self, mint: str) -> bool:
         """Return True if this mint was tagged as a bundled launch."""
         return self._bundle_decided.get(mint, False)
+
+    def has_bot_buyer(self, mint: str) -> bool:
+        """
+        True if any of this mint's first BUNDLE_WINDOW_S buyers is a known
+        sniper-bot wallet. Tighter than is_bundled_launch — fires even when
+        only ONE bot showed up (bundle threshold needs 2+).
+        """
+        return self._bot_buyer_mints.get(mint, False)
 
     def bundle_pending(self, mint: str) -> bool:
         """True if we're still inside the observation window for this mint."""
@@ -183,6 +212,17 @@ class WalletIntel:
         n_buyers = len(bundle["early_buyers"])
         is_bundled = n_buyers >= BUNDLE_BUYER_LIMIT
         self._bundle_decided[mint] = is_bundled
+
+        # Tighter check: was any early buyer a known sniper bot? Fires even
+        # when only ONE bot showed up (bundle requires 2+).
+        bot_buyers = [a for a in bundle["early_buyers"] if self.is_bot_wallet(a)]
+        if bot_buyers:
+            self._bot_buyer_mints[mint] = True
+            logger.info(
+                f"[WALLET-INTEL] Bot-targeted launch: {mint[:8]}... "
+                f"({len(bot_buyers)} known bot wallet(s) in {BUNDLE_WINDOW_S}s window)"
+            )
+
         if is_bundled:
             logger.info(
                 f"[WALLET-INTEL] Bundled launch detected: {mint[:8]}... "
@@ -193,6 +233,8 @@ class WalletIntel:
             self._save_bundles()
         if len(self._wallets) % 100 == 0:
             self._save_wallets()
+        if len(self._bot_buyer_mints) % 25 == 0:
+            self._save_bot_buyer_mints()
 
     # ── Subscription wiring ──────────────────────────────────────────────────
     def attach(self, monitor):
@@ -215,6 +257,7 @@ class WalletIntel:
             try:
                 self._save_wallets()
                 self._save_bundles()
+                self._save_bot_buyer_mints()
             except Exception as e:
                 logger.debug(f"[WALLET-INTEL] periodic save error: {e}")
 
@@ -223,6 +266,7 @@ class WalletIntel:
         # Final save on shutdown
         self._save_wallets()
         self._save_bundles()
+        self._save_bot_buyer_mints()
 
 
 # Singleton — imported by signal_scorer

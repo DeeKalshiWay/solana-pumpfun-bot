@@ -18,6 +18,7 @@ import aiohttp
 from loguru import logger
 
 from analyzer.counterfactual import counterfactual
+from analyzer.rug_memory import rug_memory
 from config import (
     ATH_RATIO_REJECT_BELOW,
     BUY_COOLDOWN_SECONDS,
@@ -119,6 +120,25 @@ class SignalScorer:
                 token["influencer_mention"] = influencer_monitor.get_mention(symbol)
 
             score, breakdown = self._compute_score(token)
+
+            # Rug-pattern memory: if this candidate's feature signature has
+            # rugged repeatedly in the past, dock the score. Penalty is 0
+            # when there's no match (or fewer than MATCH_MIN_RUGS).
+            rug_penalty = rug_memory.score_penalty({
+                "initial_buy_sol":   token.get("initial_buy_sol", 0),
+                "bonding_curve_pct": token.get("bonding_curve_pct", 0),
+                "score":             score,
+            })
+            if rug_penalty > 0:
+                rug_matches = rug_memory.matched_count({
+                    "initial_buy_sol":   token.get("initial_buy_sol", 0),
+                    "bonding_curve_pct": token.get("bonding_curve_pct", 0),
+                    "score":             score,
+                })
+                breakdown["rug_pattern_match"] = -rug_penalty
+                token["rug_pattern_matches"] = rug_matches
+                score -= rug_penalty
+
             token["score"]           = score
             token["score_breakdown"] = breakdown
             token["scored_at"]       = time.time()
@@ -126,11 +146,13 @@ class SignalScorer:
             self.scored_count += 1
 
             curve_pct = token.get("bonding_curve_pct", 0)
+            rug_note  = f" | RUG-MATCH ×{token.get('rug_pattern_matches', 0)} (-{rug_penalty})" if rug_penalty else ""
             logger.info(
                 f"[SCORE] {symbol} | {mint[:8]}... | Score: {score}/100 | "
                 f"Curve: {curve_pct:.1f}% | "
                 f"MC: {token.get('market_cap_sol', 0):.1f}S | "
                 f"Creator: {token.get('initial_buy_sol', 0):.2f}S"
+                f"{rug_note}"
             )
 
             # Hard filters first
@@ -263,6 +285,12 @@ class SignalScorer:
         mint = token.get("mint", "")
         if mint and wallet_intel.is_bundled_launch(mint):
             token["reject_reason"] = "bundled_launch"
+            return False
+
+        # Tighter sniper-target check: any KNOWN bot wallet was among the first
+        # buyers (fires for single bots — bundle threshold needs 2+).
+        if mint and wallet_intel.has_bot_buyer(mint):
+            token["reject_reason"] = "bot_buyer_in_window"
             return False
 
         # ATH-ratio reject — token already dumped from peak; we'd be top-buying.
