@@ -73,6 +73,19 @@ class WebDashboard:
         # Balance-based PnL is the source of truth — captures pre-persistence gains too.
         balance_pnl_sol = round(balance - start, 6)
         balance_pnl_pct = round((balance - start) / start * 100, 2) if start > 0 else 0
+
+        # Mark-to-market: add current value of open positions (current_price × tokens_held)
+        # so the headline number reflects unrealized gains/losses instead of just wallet flow.
+        mtm_open_value = 0.0
+        for pos in self.risk_mgr.positions.values():
+            try:
+                mtm_open_value += float(pos.current_price or 0) * float(pos.tokens_held or 0)
+            except Exception:
+                pass
+        mtm_total_sol = balance + mtm_open_value
+        mtm_pnl_sol   = round(mtm_total_sol - start, 6)
+        mtm_pnl_pct   = round((mtm_total_sol - start) / start * 100, 2) if start > 0 else 0
+
         return web.json_response({
             "paper_trading":   self.paper_trading,
             "uptime_seconds":  int(time.time() - self.start_time),
@@ -83,6 +96,10 @@ class WebDashboard:
             "win_rate":        round(stats["win_rate"] * 100, 1),
             "total_pnl_sol":   balance_pnl_sol,
             "total_pnl_pct":   balance_pnl_pct,
+            "mtm_open_value_sol": round(mtm_open_value, 6),
+            "mtm_total_sol":   round(mtm_total_sol, 6),
+            "mtm_pnl_sol":     mtm_pnl_sol,
+            "mtm_pnl_pct":     mtm_pnl_pct,
             "record_pnl_sol":  round(stats["total_pnl_sol"], 6),
             "total_exposure":  round(stats["total_exposure"], 6),
             "emergency_stop":  stats["emergency_stop"],
