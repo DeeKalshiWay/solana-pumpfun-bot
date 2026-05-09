@@ -219,6 +219,30 @@ class WebDashboard:
         logger.critical("[DASHBOARD] EMERGENCY STOP triggered via web UI — force-selling all positions")
         return web.json_response({"ok": True, "emergency_stop": True})
 
+    async def api_force_sell(self, request):
+        """
+        Sell one open position immediately. Body: {"mint": "...", "confirm": true}
+        Uses risk_mgr._force_sell which executes a 100% market sell and
+        runs the normal close_position bookkeeping (DB write, alerts, etc.).
+        """
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        if not body.get("confirm"):
+            return web.json_response({"ok": False, "error": "missing confirm"}, status=400)
+        mint = body.get("mint", "")
+        if not mint:
+            return web.json_response({"ok": False, "error": "missing mint"}, status=400)
+        if mint not in self.risk_mgr.positions:
+            return web.json_response({"ok": False, "error": "position not found"}, status=404)
+        symbol = self.risk_mgr.positions[mint].symbol
+        logger.warning(f"[DASHBOARD] Force-sell requested via web UI: {symbol} ({mint[:8]}...)")
+        # Don't await — the sell can take a few seconds and we don't want
+        # the HTTP request hanging. Fire-and-forget; UI polls /api/positions.
+        asyncio.create_task(self.risk_mgr._force_sell(mint, "manual_force_sell"))
+        return web.json_response({"ok": True, "mint": mint, "symbol": symbol})
+
     async def api_emergency_resume(self, request):
         """Clear the emergency stop. Body: {"confirm": true}"""
         try:
@@ -276,6 +300,7 @@ class WebDashboard:
         app.router.add_get("/api/report",    self.api_report)
         app.router.add_post("/api/emergency_stop",   self.api_emergency_stop)
         app.router.add_post("/api/emergency_resume", self.api_emergency_resume)
+        app.router.add_post("/api/force_sell",       self.api_force_sell)
 
         self._runner = web.AppRunner(app)
         await self._runner.setup()
