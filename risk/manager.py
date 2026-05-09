@@ -56,6 +56,7 @@ from config import (
     TRAILING_STOP_PCT,
 )
 from detector.creator_tracker import creator_tracker
+from logger.telegram_alerts import send_alert
 from logger.trade_db import get_trade_db
 
 
@@ -370,6 +371,15 @@ class RiskManager:
             f"[POSITION CLOSED] {pos.symbol} | "
             f"PnL: {sign}{pnl_sol:.4f} SOL ({sign}{pos.pnl_pct:.1f}%) | "
             f"held {pos.age_minutes:.1f}min | reason={trade_record['reason']}"
+        )
+
+        # Push to Telegram if configured. No-op if creds aren't set.
+        emoji = "✅" if pnl_sol > 0 else ("⚠️" if pnl_sol == 0 else "❌")
+        if pos.pnl_pct >= 50:
+            emoji = "🚀"
+        send_alert(
+            f"{emoji} <b>{pos.symbol}</b> {sign}{pnl_sol:.4f} SOL "
+            f"({sign}{pos.pnl_pct:.1f}%) | {pos.age_minutes:.1f}m | {trade_record['reason']}"
         )
 
     # ── Price update ──────────────────────────────────────────────────────────
