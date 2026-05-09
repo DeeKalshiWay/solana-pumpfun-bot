@@ -11,6 +11,7 @@ Upgraded with open-source alpha strategies:
 
 import asyncio
 import datetime
+import json
 import time
 
 import aiohttp
@@ -26,6 +27,7 @@ from config import (
     MIN_BUY_SCORE,
     NAME_BLACKLIST_SUBSTRINGS,
     RPC_URL,
+    SMART_CALLER_MIN,
     SYMBOL_BLACKLIST_EXACT,
 )
 from detector.creator_tracker import creator_tracker
@@ -146,6 +148,23 @@ class SignalScorer:
                 # Bin by score band, not exact score, so aggregation is meaningful
                 band = (score // 10) * 10
                 counterfactual.record_rejection(token, f"score_band_{band}")
+
+                # Smart Caller: borderline rejections (just below threshold)
+                # get queued for manual review by the control bot.
+                if SMART_CALLER_MIN <= score < MIN_BUY_SCORE:
+                    try:
+                        with open("logs/candidate_queue.jsonl", "a", encoding="utf-8") as f:
+                            f.write(json.dumps({
+                                "ts":         time.time(),
+                                "mint":       mint,
+                                "symbol":     symbol,
+                                "score":      score,
+                                "init_buy":   token.get("initial_buy_sol", 0),
+                                "curve_pct":  token.get("bonding_curve_pct", 0),
+                                "creator":    (token.get("creator", "") or "")[:12],
+                            }) + "\n")
+                    except Exception as e:
+                        logger.debug(f"[SMART CALLER] write fail: {e}")
                 return
 
             # Tier 2: holder concentration RPC check — done last because it's the

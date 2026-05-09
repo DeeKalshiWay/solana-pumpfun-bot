@@ -60,11 +60,60 @@ LOG_FILE      = BOT_DIR / "logs" / "pump_bot.log"
 TRADES_DB     = BOT_DIR / "logs" / "trades.db"
 RUGGER_FILE   = BOT_DIR / "logs" / "rugger_creators.json"
 RUN_FOREVER   = BOT_DIR / "run_forever.ps1"
+WATCHLIST_FILE   = BOT_DIR / "logs" / "watchlist.json"
+CANDIDATE_QUEUE  = BOT_DIR / "logs" / "candidate_queue.jsonl"
+WATCH_POLL_SEC   = 60
+WATCH_THRESHOLD  = 25.0   # default: alert on ±25% move from last alert price
+PUMP_PROGRAM_ID  = "6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P"
 
 # Lazy imports — only loaded when commands need them, keeps bot responsive
 def _lazy_imports():
     from telethon import TelegramClient, events
     return TelegramClient, events
+
+
+# ── Watchlist helpers ───────────────────────────────────────────────────────
+def _load_watchlist() -> dict:
+    if not WATCHLIST_FILE.exists():
+        return {}
+    try:
+        return json.loads(WATCHLIST_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _save_watchlist(d: dict) -> None:
+    WATCHLIST_FILE.parent.mkdir(parents=True, exist_ok=True)
+    WATCHLIST_FILE.write_text(json.dumps(d, indent=2), encoding="utf-8")
+
+
+async def _bonding_curve_price(session, mint: str) -> float:
+    """SOL per raw token unit, or 0 if curve missing/migrated."""
+    try:
+        import base64
+        import struct
+        from solders.pubkey import Pubkey
+        prog = Pubkey.from_string(PUMP_PROGRAM_ID)
+        bc, _ = Pubkey.find_program_address(
+            [b"bonding-curve", bytes(Pubkey.from_string(mint))], prog
+        )
+        rpc = os.getenv("RPC_URL")
+        payload = {
+            "jsonrpc": "2.0", "id": 1, "method": "getAccountInfo",
+            "params": [str(bc), {"encoding": "base64", "commitment": "confirmed"}],
+        }
+        async with session.post(rpc, json=payload, timeout=4) as r:
+            d = await r.json()
+        val = (d.get("result") or {}).get("value")
+        if not val:
+            return 0.0
+        raw = base64.b64decode(val["data"][0])
+        v_tok, v_sol = struct.unpack_from("<QQ", raw, 8)
+        if v_tok == 0:
+            return 0.0
+        return (v_sol / 1e9) / v_tok
+    except Exception:
+        return 0.0
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -351,19 +400,127 @@ async def cmd_log(_event, args: list[str]) -> str:
     return f"<pre>{tail}</pre>"
 
 
+async def cmd_watch(_event, args: list[str]) -> str:
+    if not args:
+        return "Usage: <code>/watch &lt;mint&gt; [threshold_pct]</code>"
+    mint = args[0].strip()
+    threshold = WATCH_THRESHOLD
+    if len(args) >= 2:
+        try:
+            threshold = float(args[1])
+        except ValueError:
+            return "Threshold must be a number"
+    import aiohttp
+    async with aiohttp.ClientSession() as s:
+        price = await _bonding_curve_price(s, mint)
+    if price <= 0:
+        return f"❌ Could not read bonding curve for <code>{mint[:12]}…</code>\n(might be migrated to Raydium or invalid)"
+    wl = _load_watchlist()
+    wl[mint] = {
+        "added_at":         int(time.time()),
+        "entry_price":      price,
+        "last_alert_price": price,
+        "threshold_pct":    threshold,
+    }
+    _save_watchlist(wl)
+    return (
+        f"👀 Watching <code>{mint[:12]}…</code>\n"
+        f"entry: {price:.10f} SOL/raw\n"
+        f"threshold: ±{threshold:.0f}% from last alert"
+    )
+
+
+async def cmd_unwatch(_event, args: list[str]) -> str:
+    if not args:
+        return "Usage: <code>/unwatch &lt;mint_prefix&gt;</code>"
+    prefix = args[0].strip()
+    wl = _load_watchlist()
+    matches = [m for m in wl if m == prefix or m.startswith(prefix)]
+    if not matches:
+        return "Not found in watchlist."
+    if len(matches) > 1:
+        return f"Ambiguous — {len(matches)} matches. Use a longer prefix."
+    del wl[matches[0]]
+    _save_watchlist(wl)
+    return f"✅ Removed <code>{matches[0][:12]}…</code>"
+
+
+async def cmd_watchlist(_event, _args: list[str]) -> str:
+    wl = _load_watchlist()
+    if not wl:
+        return "Watchlist empty. <code>/watch &lt;mint&gt;</code> to add."
+    import aiohttp
+    lines = [f"<b>Watchlist ({len(wl)}):</b>"]
+    async with aiohttp.ClientSession() as s:
+        for mint, info in list(wl.items())[:30]:
+            price = await _bonding_curve_price(s, mint)
+            entry = info.get("entry_price", 0) or 0
+            pct_from_entry = ((price - entry) / entry * 100) if entry > 0 and price > 0 else 0
+            sign = "+" if pct_from_entry >= 0 else ""
+            status = "💀" if price <= 0 else ("🚀" if pct_from_entry >= 50 else "📈" if pct_from_entry > 0 else "📉")
+            lines.append(
+                f"{status} <code>{mint[:12]}…</code> "
+                f"{sign}{pct_from_entry:.1f}% "
+                f"(±{info.get('threshold_pct', WATCH_THRESHOLD):.0f}%)"
+            )
+    return "\n".join(lines)
+
+
+async def cmd_buy(_event, args: list[str]) -> str:
+    if not args:
+        return "Usage: <code>/buy &lt;mint&gt; [sol_amount]</code> (default 0.01)"
+    mint = args[0].strip()
+    sol_amount = 0.01
+    if len(args) >= 2:
+        try:
+            sol_amount = float(args[1])
+        except ValueError:
+            return "Amount must be a decimal like 0.02"
+    if sol_amount < 0.001 or sol_amount > 1.0:
+        return "Amount must be 0.001-1.0 SOL"
+    from trader.executor import TradeExecutor
+    from trader.wallet import SolanaWallet
+    wallet = SolanaWallet()
+    await wallet.start()
+    executor = TradeExecutor(wallet.keypair)
+    await executor.start()
+    sol_before = await wallet.get_sol_balance()
+    try:
+        result = await executor.buy(mint, sol_amount)
+    except Exception as e:
+        await wallet.stop()
+        return f"❌ <code>{type(e).__name__}: {str(e)[:200]}</code>"
+    await asyncio.sleep(4)
+    sol_after = await wallet.get_sol_balance()
+    await wallet.stop()
+    if not result.get("success"):
+        return f"❌ Buy failed: <code>{result.get('error', 'unknown')}</code>"
+    spent = sol_before - sol_after
+    return (
+        f"✅ Bought <code>{mint[:12]}…</code>\n"
+        f"spent: {spent:.4f} SOL\n"
+        f"sig: <code>{(result.get('signature') or '')[:24]}</code>\n"
+        f"<i>Manual buy — bot won't auto-manage exits. Use /dump to sell, or /watch to track.</i>"
+    )
+
+
 async def cmd_help(_event, _args: list[str]) -> str:
     return (
         "<b>Pump bot control</b>\n"
-        "/status — quick health\n"
-        "/wallet, /positions — on-chain state\n"
-        "/recent [N] — last N closes\n"
-        "/dump &lt;mint&gt;, /dumpall — manual sells\n"
-        "/stop, /start — bot lifecycle\n"
-        "/threshold N — set MIN_BUY_SCORE\n"
-        "/sizing X — set MAX_POSITION_PCT\n"
-        "/blacklist &lt;addr&gt; — add creator to ruglist\n"
-        "/preflight — self-check\n"
-        "/log [N] — tail bot log\n"
+        "<b>Health:</b>\n"
+        "  /status, /wallet, /positions\n"
+        "  /recent [N], /preflight, /log [N]\n"
+        "<b>Trading:</b>\n"
+        "  /buy &lt;mint&gt; [sol] — manual entry\n"
+        "  /dump &lt;mint&gt;, /dumpall — manual sell\n"
+        "  /stop, /start — bot lifecycle\n"
+        "<b>Tuning (restart needed):</b>\n"
+        "  /threshold N, /sizing X, /blacklist &lt;addr&gt;\n"
+        "<b>Watchlist:</b>\n"
+        "  /watch &lt;mint&gt; [pct] — track a token\n"
+        "  /unwatch &lt;mint&gt;, /watchlist\n"
+        "<b>Aggregator:</b>\n"
+        "  Forward any message → I'll extract mints/tickers and score\n"
     )
 
 
@@ -372,6 +529,7 @@ COMMANDS = {
     "wallet":    cmd_wallet,
     "positions": cmd_positions,
     "recent":    cmd_recent,
+    "buy":       cmd_buy,
     "dump":      cmd_dump,
     "dumpall":   cmd_dumpall,
     "stop":      cmd_stop,
@@ -381,8 +539,141 @@ COMMANDS = {
     "blacklist": cmd_blacklist,
     "preflight": cmd_preflight,
     "log":       cmd_log,
+    "watch":     cmd_watch,
+    "unwatch":   cmd_unwatch,
+    "watchlist": cmd_watchlist,
     "help":      cmd_help,
 }
+
+
+# ── Personal Alpha Aggregator ───────────────────────────────────────────────
+async def aggregator_reply(event, text: str) -> str | None:
+    """Extract mints + tickers from any non-command message.
+
+    Returns a Telegram-formatted summary if anything was found, or None
+    so the caller can stay quiet on uninteresting messages.
+    """
+    try:
+        from detector.social_monitor import (
+            extract_mints_from_text, record_mention, score_hype_text,
+        )
+    except Exception as e:
+        return f"<i>aggregator unavailable: {e}</i>"
+
+    mints   = extract_mints_from_text(text)
+    tickers = list(set(re.findall(r"\$([A-Za-z][A-Za-z0-9]{1,11})", text)))
+    hype    = score_hype_text(text)
+
+    if not mints and not tickers and hype < 30:
+        return None  # nothing interesting
+
+    # Feed mentions into the in-process social store. Only useful if the
+    # trader is running in the same Python process — for our two-process
+    # setup it mostly serves as a record. A future integration could
+    # write to a shared queue file the trader reads.
+    for m in mints:
+        try:
+            record_mention(m, "tg:aggregator", hype)
+        except Exception:
+            pass
+
+    lines = ["📡 <b>Aggregator</b>"]
+    if mints:
+        lines.append("Mints found:")
+        for m in mints[:5]:
+            lines.append(f"  <code>{m}</code>")
+            lines.append(f"  → <code>/buy {m} 0.02</code>  /  <code>/watch {m}</code>")
+    if tickers:
+        shown = ", ".join(f"${t}" for t in tickers[:8])
+        lines.append(f"Tickers: {shown}")
+    lines.append(f"Hype keywords: {hype}")
+    return "\n".join(lines)
+
+
+# ── Background tasks ────────────────────────────────────────────────────────
+async def watchlist_poller(client) -> None:
+    """Poll bonding-curve prices for watched tokens, alert on big moves."""
+    import aiohttp
+    while True:
+        await asyncio.sleep(WATCH_POLL_SEC)
+        try:
+            wl = _load_watchlist()
+            if not wl or not OWNER_CHAT_ID:
+                continue
+            async with aiohttp.ClientSession() as s:
+                changed = False
+                for mint, info in list(wl.items()):
+                    price = await _bonding_curve_price(s, mint)
+                    if price <= 0:
+                        continue
+                    last = info.get("last_alert_price", info.get("entry_price", 0)) or 0
+                    if last <= 0:
+                        info["last_alert_price"] = price
+                        wl[mint] = info
+                        changed = True
+                        continue
+                    pct = (price - last) / last * 100
+                    threshold = info.get("threshold_pct", WATCH_THRESHOLD)
+                    if abs(pct) >= threshold:
+                        info["last_alert_price"] = price
+                        wl[mint] = info
+                        changed = True
+                        sign = "🚀" if pct > 0 else "📉"
+                        msg = (
+                            f"{sign} <b>watch</b> <code>{mint[:12]}…</code> "
+                            f"{'+' if pct > 0 else ''}{pct:.1f}% "
+                            f"since last alert"
+                        )
+                        try:
+                            await client.send_message(int(OWNER_CHAT_ID), msg, parse_mode="HTML")
+                        except Exception as e:
+                            logger.debug(f"[WATCHLIST] send fail: {e}")
+                if changed:
+                    _save_watchlist(wl)
+        except Exception as e:
+            logger.debug(f"[WATCHLIST POLLER] {e}")
+
+
+async def candidate_tailer(client) -> None:
+    """Tail logs/candidate_queue.jsonl and post fresh borderline candidates."""
+    seen: set[str] = set()
+    while True:
+        await asyncio.sleep(15)
+        try:
+            if not CANDIDATE_QUEUE.exists() or not OWNER_CHAT_ID:
+                continue
+            now = time.time()
+            for line in CANDIDATE_QUEUE.read_text(encoding="utf-8", errors="replace").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    cand = json.loads(line)
+                except Exception:
+                    continue
+                mint = cand.get("mint", "")
+                if not mint or mint in seen:
+                    continue
+                seen.add(mint)
+                # Skip stale (older than 5 min) — bot was down or post lag
+                if now - cand.get("ts", 0) > 300:
+                    continue
+                sym   = (cand.get("symbol") or "?")[:18]
+                score = cand.get("score", "?")
+                init  = cand.get("init_buy", 0)
+                curve = cand.get("curve_pct", 0)
+                msg = (
+                    f"🤔 <b>Candidate</b>: {sym}\n"
+                    f"score {score} | init_buy {init:.2f} SOL | curve {curve:.1f}%\n"
+                    f"<code>{mint}</code>\n"
+                    f"<code>/buy {mint} 0.02</code>  /  <code>/watch {mint}</code>"
+                )
+                try:
+                    await client.send_message(int(OWNER_CHAT_ID), msg, parse_mode="HTML")
+                except Exception as e:
+                    logger.debug(f"[CANDIDATE] send fail: {e}")
+        except Exception as e:
+            logger.debug(f"[CANDIDATE TAILER] {e}")
 
 
 # ── Main ────────────────────────────────────────────────────────────────────
@@ -430,6 +721,11 @@ async def main() -> int:
                 return
 
             if not text.startswith("/"):
+                # Personal Alpha Aggregator — extract mints/tickers from any
+                # forwarded or pasted message. Returns None if uninteresting.
+                summary = await aggregator_reply(event, text)
+                if summary:
+                    await event.respond(summary, parse_mode="HTML")
                 return
 
             parts = text[1:].split()
@@ -456,6 +752,11 @@ async def main() -> int:
 
         except Exception as e:
             logger.exception(f"[HANDLER] {e}")
+
+    # Background loops: watchlist polling + candidate queue tailer
+    asyncio.create_task(watchlist_poller(client), name="watchlist_poller")
+    asyncio.create_task(candidate_tailer(client),  name="candidate_tailer")
+    logger.info("[CONTROL] watchlist poller + candidate tailer started")
 
     logger.info("[CONTROL] listening for commands. /help for list.")
     await client.run_until_disconnected()

@@ -198,6 +198,11 @@ TIME_EXIT_MINUTES           = _env_int("TIME_EXIT_MINUTES",              5)
 EARLY_RUG_PCT        = _env_float("EARLY_RUG_PCT",         5.0)
 EARLY_RUG_WINDOW_SEC = _env_int  ("EARLY_RUG_WINDOW_SEC",  60)
 
+# Smart Caller: when scoring rejects a token in the borderline band, write it
+# to logs/candidate_queue.jsonl so the control bot can post it for manual
+# yes/no review. Range is [SMART_CALLER_MIN, MIN_BUY_SCORE-1].
+SMART_CALLER_MIN = _env_int("SMART_CALLER_MIN", 20)
+
 # Creators that produced rugs we've already lost on, OR rugged after we
 # rejected their token. Block at trade-loop level so we never enter again.
 # The JSON file is rebuilt by `python -m tools.build_rugger_blacklist`
