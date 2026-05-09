@@ -182,11 +182,27 @@ TIME_EXIT_MINUTES           = _env_int("TIME_EXIT_MINUTES",              5)
 EARLY_RUG_PCT        = _env_float("EARLY_RUG_PCT",         5.0)
 EARLY_RUG_WINDOW_SEC = _env_int  ("EARLY_RUG_WINDOW_SEC",  60)
 
-# Creators that produced 2+ consecutive losers in trade history. Block at
-# trade-loop level so we never enter their tokens.
+# Creators that produced rugs we've already lost on, OR rugged after we
+# rejected their token. Block at trade-loop level so we never enter again.
+# The JSON file is rebuilt by `python -m tools.build_rugger_blacklist`
+# from trades.db + counterfactual.jsonl + creators.json.
+def _load_rugger_creators() -> set[str]:
+    import json as _json
+    import os as _os
+    path = _os.path.join(_os.path.dirname(__file__), "logs", "rugger_creators.json")
+    if not _os.path.exists(path):
+        return set()
+    try:
+        with open(path, encoding="utf-8") as _f:
+            data = _json.load(_f)
+        return set(data.get("creators", []))
+    except Exception:
+        return set()
+
+
 CREATOR_BLACKLIST = {
     "ETroz4qu4C6E9HJvYx8G3RjwwhtffSLaBy3yPjYm8THL",  # 4 trades, 0 wins, -0.020 SOL (2026-05-08)
-}
+} | _load_rugger_creators()
 
 # No-movement exit: if position hasn't moved either direction in N seconds.
 NO_MOVEMENT_EXIT_SECONDS = _env_int("NO_MOVEMENT_EXIT_SECONDS", 90)
