@@ -33,9 +33,15 @@ BUNDLE_LAUNCH_FILE    = "logs/bundled_launches.json"
 BOT_BUYER_MINTS_FILE  = "logs/bot_buyer_mints.json"
 
 # Thresholds
-BOT_WALLET_THRESHOLD  = 50     # mints bought to qualify as a bot
+BOT_WALLET_THRESHOLD  = 25     # mints bought to qualify as a bot
+                                # (lowered from 50 — no human buys 25+ pump.fun
+                                # launches; this catches more sniper bots
+                                # without meaningful false-positive risk)
 BUNDLE_WINDOW_S       = 4      # seconds after create to look for bundle
-BUNDLE_BUYER_LIMIT    = 2      # 2+ non-creator buyers in window = bundled
+BUNDLE_BUYER_LIMIT    = 5      # 5+ non-creator buyers in window = bundled
+                                # (raised from 2 — bundles can be legitimate
+                                # team launches; only the extreme coordinated
+                                # cases warrant rejection)
 BOT_BUYER_MINTS_CAP   = 5000   # ring-buffer size; rugs are old data after a while
 
 
