@@ -75,6 +75,10 @@ class Position:
     highest_price:   float = 0
     tp_levels_hit:   list  = field(default_factory=list)
     score:           int   = 0
+    # Pre-rug-penalty score — needed so rug_memory record/lookup use the SAME
+    # bucket key. Without this the feature was silently broken: records went
+    # in at post-penalty bins, lookups fired at pre-penalty bins, no matches.
+    raw_score:       int   = 0
     # Snapshot of features at entry — needed at close to feed rug_memory
     # without re-fetching state we already had at open.
     init_buy_sol:      float = 0
@@ -332,6 +336,7 @@ class RiskManager:
             current_price     = entry_price,
             highest_price     = entry_price,
             score             = token.get("score", 0),
+            raw_score         = token.get("raw_score", token.get("score", 0)),
             init_buy_sol      = float(token.get("initial_buy_sol", 0) or 0),
             bonding_curve_pct = float(token.get("bonding_curve_pct", 0) or 0),
         )
@@ -373,12 +378,18 @@ class RiskManager:
 
         # Rug-pattern memory: if this trade rugged, record its fingerprint
         # so future candidates with the same pattern get docked at scoring.
-        if pos.pnl_pct <= RUG_PNL_THRESHOLD:
+        # Two-condition guard:
+        #   1. pnl_pct <= RUG_PNL_THRESHOLD  (e.g., -50%)
+        #   2. absolute SOL loss > 0.005     (filters friction-only "rugs"
+        #      on tiny trades — a 0.01 SOL trade losing 50% is just fee drag)
+        # And use RAW score (pre-rug-penalty) so the bucket key matches the
+        # one the scorer uses at lookup time.
+        if pos.pnl_pct <= RUG_PNL_THRESHOLD and pnl_sol < -0.005:
             rug_memory.record_rug(
                 token_features = {
                     "initial_buy_sol":   pos.init_buy_sol,
                     "bonding_curve_pct": pos.bonding_curve_pct,
-                    "score":             pos.score,
+                    "score":             pos.raw_score,
                 },
                 pnl_pct       = pos.pnl_pct,
                 hold_minutes  = pos.age_minutes,

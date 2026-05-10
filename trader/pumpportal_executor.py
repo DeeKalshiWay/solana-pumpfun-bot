@@ -155,6 +155,10 @@ class PumpPortalExecutor:
             while tasks:
                 done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
                 for t in done:
+                    # _send_one already swallows exceptions and returns None,
+                    # but stay defensive — t.result() must never crash the race.
+                    if t.cancelled() or t.exception() is not None:
+                        continue
                     sig = t.result()
                     if sig:
                         winner_sig = sig
@@ -162,6 +166,10 @@ class PumpPortalExecutor:
                 if winner_sig:
                     for p in pending:
                         p.cancel()
+                    # Drain cancelled tasks so asyncio doesn't warn about
+                    # unawaited coroutines in some Python versions.
+                    if pending:
+                        await asyncio.gather(*pending, return_exceptions=True)
                     break
                 tasks = list(pending)
         except Exception as e:
@@ -208,24 +216,24 @@ class PumpPortalExecutor:
                 )
             except Exception:
                 done, pending = set(), set(tasks)
+
             status = None
             for t in done:
+                # Defensive: _poll_one swallows exceptions and returns None,
+                # but never let a stray exception crash the confirm loop.
+                if t.cancelled() or t.exception() is not None:
+                    continue
                 s = t.result()
                 if s:
                     status = s
                     break
+
             for p in pending:
                 p.cancel()
-            # Also drain remaining done tasks that weren't the winner — sometimes
-            # a slower RPC has the result first if the winner returned None.
-            for t in done:
-                if t.cancelled() or t.exception() is not None:
-                    continue
-                if status is None:
-                    s = t.result()
-                    if s:
-                        status = s
-                        break
+            # Drain cancelled tasks so asyncio doesn't warn about unawaited
+            # coroutines on shutdown / some Python versions.
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
 
             if status is not None:
                 if status.get("err"):

@@ -133,21 +133,24 @@ class SignalScorer:
                 token["influencer_mention"] = influencer_monitor.get_mention(symbol)
 
             score, breakdown = self._compute_score(token)
+            # Stash the RAW (pre-rug-penalty) score so:
+            #   - rug_memory record + lookup use the SAME bucket key (otherwise
+            #     records go in at post-penalty bins and lookups fire at
+            #     pre-penalty bins → matches never happen, feature dead)
+            #   - downstream logging can show both raw and effective scores
+            token["raw_score"] = score
 
             # Rug-pattern memory: if this candidate's feature signature has
             # rugged repeatedly in the past, dock the score. Penalty is 0
             # when there's no match (or fewer than MATCH_MIN_RUGS).
-            rug_penalty = rug_memory.score_penalty({
+            rug_features = {
                 "initial_buy_sol":   token.get("initial_buy_sol", 0),
                 "bonding_curve_pct": token.get("bonding_curve_pct", 0),
-                "score":             score,
-            })
+                "score":             score,   # use RAW score for the bucket key
+            }
+            rug_penalty = rug_memory.score_penalty(rug_features)
             if rug_penalty > 0:
-                rug_matches = rug_memory.matched_count({
-                    "initial_buy_sol":   token.get("initial_buy_sol", 0),
-                    "bonding_curve_pct": token.get("bonding_curve_pct", 0),
-                    "score":             score,
-                })
+                rug_matches = rug_memory.matched_count(rug_features)
                 breakdown["rug_pattern_match"] = -rug_penalty
                 token["rug_pattern_matches"] = rug_matches
                 score -= rug_penalty
