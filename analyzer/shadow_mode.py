@@ -72,10 +72,9 @@ Usage (once wired):
 import json
 import os
 import time
-from collections import defaultdict, deque
+from collections import deque
 
 from loguru import logger
-
 
 SHADOW_DECISIONS = "logs/shadow_decisions.jsonl"
 SHADOW_OUTCOMES  = "logs/shadow_outcomes.jsonl"

@@ -137,8 +137,7 @@ class DailyReporter:
         else:
             n_ruggers = len(ruggers)
 
-        rug_patterns = _read_json("logs/rug_patterns.jsonl")
-        # Total rug-pattern records (load file directly since it's JSONL)
+        # Total rug-pattern records (JSONL, count lines directly)
         n_rug_patterns_total = 0
         if os.path.exists("logs/rug_patterns.jsonl"):
             with open("logs/rug_patterns.jsonl", encoding="utf-8") as f:
@@ -180,7 +179,9 @@ class DailyReporter:
     # ── Rendering ───────────────────────────────────────────────────────────
     def _render(self, s: dict) -> str:
         date_str = datetime.fromtimestamp(s["now"]).strftime("%Y-%m-%d")
-        sign = lambda v: f"+{v:.4f}" if v >= 0 else f"{v:.4f}"
+
+        def sign(v: float) -> str:
+            return f"+{v:.4f}" if v >= 0 else f"{v:.4f}"
 
         bw_sym = s["biggest_win"]["symbol"]  if s["biggest_win"]  else "—"
         bw_pnl = sign(s["biggest_win"]["pnl_sol"])  if s["biggest_win"]  else "—"

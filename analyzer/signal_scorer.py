@@ -26,12 +26,14 @@ from config import (
     DEAD_HOURS_UTC,
     MAX_BONDING_CURVE_PCT,
     MAX_INITIAL_BUY_SOL,
-    MIN_BUY_SCORE,
     NAME_BLACKLIST_SUBSTRINGS,
     RPC_URL,
     SMART_CALLER_MIN,
     SYMBOL_BLACKLIST_EXACT,
 )
+
+# Note: MIN_BUY_SCORE is no longer imported directly — the dynamic
+# threshold comes from auto_tuner.effective_min_score().
 from detector.creator_tracker import creator_tracker
 from detector.dex_monitor import DexMonitor
 from detector.holder_filter import concentration_too_high, get_top10_concentration

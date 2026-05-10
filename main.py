@@ -198,7 +198,7 @@ async def price_monitor_loop(risk_manager, executor):
                     *[_get_token_price(session, m, JUPITER_API_URL, SOL_MINT, RPC_URL) for m in mints],
                     return_exceptions=True,
                 )
-                for mint, price in zip(mints, results):
+                for mint, price in zip(mints, results, strict=True):
                     if isinstance(price, (int, float)) and price > 0:
                         risk_manager.update_price(mint, price)
                         if hasattr(executor, "update_price"):

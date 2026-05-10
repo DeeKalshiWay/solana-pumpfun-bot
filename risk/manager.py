@@ -10,6 +10,7 @@ Full risk management layer — upgraded with open-source research:
 """
 
 import asyncio
+import datetime
 import json
 import os
 import time
@@ -17,10 +18,7 @@ from dataclasses import dataclass, field
 
 from loguru import logger
 
-CLOSED_TRADES_FILE = "logs/closed_trades.jsonl"
-RISK_STATE_FILE    = "logs/risk_state.json"
-import datetime
-
+from analyzer.rug_memory import RUG_PNL_THRESHOLD, rug_memory
 from config import (
     ADAPTIVE_COLD_MULT,
     ADAPTIVE_COLD_WR,
@@ -55,10 +53,12 @@ from config import (
     TRAILING_STOP_MOONSHOT_TRIGGER,
     TRAILING_STOP_PCT,
 )
-from analyzer.rug_memory import RUG_PNL_THRESHOLD, rug_memory
 from detector.creator_tracker import creator_tracker
 from logger.telegram_alerts import send_alert
 from logger.trade_db import get_trade_db
+
+CLOSED_TRADES_FILE = "logs/closed_trades.jsonl"
+RISK_STATE_FILE    = "logs/risk_state.json"
 
 
 @dataclass

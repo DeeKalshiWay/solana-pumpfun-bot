@@ -144,7 +144,7 @@ class PumpPortalExecutor:
         if len(urls) == 1:
             sig = await _send_one(urls[0])
             if not sig:
-                logger.warning(f"RPC rejected (PP): single-RPC send failed")
+                logger.warning("RPC rejected (PP): single-RPC send failed")
             return sig
 
         # Race: first non-None signature wins, others are still in-flight
