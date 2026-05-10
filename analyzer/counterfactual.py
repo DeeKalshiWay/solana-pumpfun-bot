@@ -28,6 +28,8 @@ from collections import defaultdict
 import aiohttp
 from loguru import logger
 
+from analyzer.rug_memory import RUG_PNL_THRESHOLD, rug_memory
+
 REJECT_QUEUE_FILE = "logs/counterfactual_pending.jsonl"  # not strictly needed but good for restart safety
 OUTCOME_FILE      = "logs/counterfactual.jsonl"
 RESOLVE_DELAY_SEC = 600    # poll outcome 10 min after rejection
@@ -60,6 +62,9 @@ class CounterfactualLogger:
             "symbol":           token.get("symbol", "???"),
             "reason":           reason,
             "score":            int(token.get("score", 0)),
+            # Raw (pre-rug-penalty) score so a rug feed-through into
+            # rug_memory uses the SAME bucket key as scorer lookups.
+            "raw_score":        int(token.get("raw_score", token.get("score", 0))),
             "ts":               time.time(),
             "mc_at_reject_sol": float(token.get("market_cap_sol", 0)),
             "initial_buy_sol":  float(token.get("initial_buy_sol", 0)),
@@ -97,6 +102,27 @@ class CounterfactualLogger:
             try:
                 outcome = await self._build_outcome(entry)
                 self._append(outcome)
+
+                # Passive rug-memory feed: if this rejected token went on to
+                # rug after rejection, record its feature signature into the
+                # rug_memory pattern store. Lets the bot keep LEARNING from
+                # the market even when wallet is unfunded / not trading.
+                #
+                # Threshold: same as live trades — pnl_pct <= -50%. We don't
+                # have a SOL loss to gate on (we never bought), so this is
+                # purely market-cap-derived.
+                if outcome.get("mc_delta_pct", 0) <= RUG_PNL_THRESHOLD:
+                    rug_memory.record_rug(
+                        token_features = {
+                            "initial_buy_sol":   entry.get("initial_buy_sol", 0),
+                            "bonding_curve_pct": entry.get("curve_pct", 0),
+                            "score":             entry.get("raw_score", entry.get("score", 0)),
+                        },
+                        pnl_pct      = outcome["mc_delta_pct"],
+                        hold_minutes = (outcome["resolved_ts"] - entry["ts"]) / 60,
+                        mint         = entry["mint"],
+                        symbol       = entry.get("symbol", "???"),
+                    )
             except Exception as e:
                 logger.debug(f"[CF] resolve error for {entry['mint'][:8]}: {e}")
         # Cap memory if pending grows unreasonably

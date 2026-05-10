@@ -67,6 +67,18 @@ PRIVATE_KEY    = os.getenv("SOLANA_PRIVATE_KEY", "YOUR_PRIVATE_KEY_HERE")
 RPC_URL        = os.getenv("RPC_URL", "https://api.mainnet-beta.solana.com")
 HELIUS_API_KEY = os.getenv("HELIUS_API_KEY", "")
 
+# ─── DAILY EMAIL REPORT ────────────────────────────────────────────────────────
+# Set in .env to enable a midnight-local-time email summary of the day's
+# activity + memory updates. Leave SMTP_HOST blank to disable the reporter.
+# For Gmail: use an App Password (Settings → Security → 2-Step Verification
+# → App Passwords). SMTP_HOST=smtp.gmail.com, SMTP_PORT=587.
+SMTP_HOST          = os.getenv("SMTP_HOST", "")
+SMTP_PORT          = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USER          = os.getenv("SMTP_USER", "")
+SMTP_PASSWORD      = os.getenv("SMTP_PASSWORD", "")
+REPORT_EMAIL_TO    = os.getenv("REPORT_EMAIL_TO", "")
+REPORT_EMAIL_FROM  = os.getenv("REPORT_EMAIL_FROM", "") or SMTP_USER
+
 # Multi-RPC racing for tx submission and confirmation.
 # Comma-separated extra endpoints in .env (e.g.
 #   EXTRA_RPC_URLS=https://...triton.one,https://solana-mainnet.g.alchemy.com/...)

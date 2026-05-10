@@ -32,6 +32,7 @@ from detector.pumpfun_monitor import PumpFunMonitor
 from detector.pumpfun_tracker import PumpFunTracker
 from detector.social_monitor import SocialMonitor
 from detector.wallet_intel import wallet_intel
+from logger.daily_report import DailyReporter
 from logger.dashboard import Dashboard, setup_logging
 from logger.report import ReportLogger
 from logger.web_server import WebDashboard
@@ -475,8 +476,9 @@ async def main():
 
     scorer     = SignalScorer(raw_queue, trade_queue, executor=executor)
     dashboard  = Dashboard(risk_mgr, scorer)
-    reporter   = ReportLogger(risk_mgr, scorer)
-    web_dash   = WebDashboard(risk_mgr, scorer, dashboard, PAPER_TRADING, report_logger=reporter)
+    reporter        = ReportLogger(risk_mgr, scorer)
+    daily_reporter  = DailyReporter(risk_mgr, scorer)
+    web_dash        = WebDashboard(risk_mgr, scorer, dashboard, PAPER_TRADING, report_logger=reporter)
 
     pumpfun_monitor  = PumpFunMonitor(raw_queue)
     # Tracker piggybacks on the monitor's WS via callback (no own connection).
@@ -517,6 +519,7 @@ async def main():
         asyncio.create_task(reporter.run(),                                                 name="report"),
         asyncio.create_task(counterfactual.run(),                                           name="counterfactual"),
         asyncio.create_task(auto_tuner.run(),                                               name="auto_tuner"),
+        asyncio.create_task(daily_reporter.run(),                                           name="daily_report"),
     ]
 
     logger.success("All systems GO — bot is live")
@@ -534,6 +537,7 @@ async def main():
     influencer_monitor.stop()
     counterfactual.stop()
     auto_tuner.stop()
+    daily_reporter.stop()
     risk_mgr.stop()
     await social_monitor.stop()
 
