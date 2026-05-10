@@ -67,6 +67,24 @@ PRIVATE_KEY    = os.getenv("SOLANA_PRIVATE_KEY", "YOUR_PRIVATE_KEY_HERE")
 RPC_URL        = os.getenv("RPC_URL", "https://api.mainnet-beta.solana.com")
 HELIUS_API_KEY = os.getenv("HELIUS_API_KEY", "")
 
+# Multi-RPC racing for tx submission and confirmation.
+# Comma-separated extra endpoints in .env (e.g.
+#   EXTRA_RPC_URLS=https://...triton.one,https://solana-mainnet.g.alchemy.com/...)
+# We'll race the same signed tx across RPC_URL + all extras and use whichever
+# accepts/confirms first. Drops Stage-3 tail latency — single-RPC stalls are
+# the long pole on busy slots.
+def _load_rpc_urls() -> list[str]:
+    urls = [RPC_URL] if RPC_URL else []
+    extra = os.getenv("EXTRA_RPC_URLS", "").strip()
+    if extra:
+        for u in extra.split(","):
+            u = u.strip()
+            if u and u not in urls:
+                urls.append(u)
+    return urls
+
+RPC_URLS = _load_rpc_urls()
+
 # ─── API KEYS ──────────────────────────────────────────────────────────────────
 TWITTER_BEARER_TOKEN = os.getenv("TWITTER_BEARER_TOKEN", "")
 TELEGRAM_API_ID      = int(os.getenv("TELEGRAM_API_ID", "0"))

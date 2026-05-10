@@ -14,7 +14,7 @@ from loguru import logger
 from solders.keypair import Keypair
 from solders.transaction import VersionedTransaction
 
-from config import PRIORITY_FEE_SOL, RPC_URL, SELL_PRIORITY_FEE_SOL, SLIPPAGE_BPS
+from config import PRIORITY_FEE_SOL, RPC_URL, RPC_URLS, SELL_PRIORITY_FEE_SOL, SLIPPAGE_BPS
 
 PUMPPORTAL_LOCAL_API = "https://pumpportal.fun/api/trade-local"
 
@@ -92,39 +92,84 @@ class PumpPortalExecutor:
             return None
 
     async def _sign_and_send(self, tx_bytes: bytes) -> str | None:
-        """Sign the PumpPortal-built transaction and submit via our RPC."""
+        """
+        Sign the PumpPortal-built tx and race-submit it across every
+        configured RPC. The same signature is valid on all of them — first
+        successful response wins, the rest are harmless duplicate sends
+        that the network deduplicates by signature.
+
+        Drops Stage-3 tail latency: single-RPC submission stalls were
+        the long pole when the leader RPC was congested or slow.
+        """
         try:
             raw_tx = VersionedTransaction.from_bytes(tx_bytes)
             signed = VersionedTransaction(raw_tx.message, [self.keypair])
             signed_bytes = bytes(signed)
-
-            payload = {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "sendTransaction",
-                "params": [
-                    base64.b64encode(signed_bytes).decode(),
-                    {
-                        "encoding": "base64",
-                        "skipPreflight": True,
-                        "preflightCommitment": "processed",
-                        "maxRetries": 3,
-                    }
-                ]
-            }
-            async with self.session.post(
-                RPC_URL, json=payload,
-                timeout=aiohttp.ClientTimeout(total=15)
-            ) as resp:
-                result = await resp.json()
-                if "error" in result:
-                    err = result['error'].get('message', str(result['error']))
-                    logger.warning(f"RPC rejected (PP): {err[:200]}")
-                    return None
-                return result.get("result")
         except Exception as e:
-            logger.warning(f"PP sign/send error: {e}")
+            logger.warning(f"PP sign error: {e}")
             return None
+
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "sendTransaction",
+            "params": [
+                base64.b64encode(signed_bytes).decode(),
+                {
+                    "encoding": "base64",
+                    "skipPreflight": True,
+                    "preflightCommitment": "processed",
+                    "maxRetries": 3,
+                }
+            ]
+        }
+
+        async def _send_one(url: str) -> str | None:
+            try:
+                async with self.session.post(
+                    url, json=payload,
+                    timeout=aiohttp.ClientTimeout(total=15)
+                ) as resp:
+                    result = await resp.json()
+                    if "error" in result:
+                        err = result['error'].get('message', str(result['error']))
+                        logger.debug(f"RPC rejected ({url[:30]}): {err[:120]}")
+                        return None
+                    return result.get("result")
+            except Exception as e:
+                logger.debug(f"RPC send error ({url[:30]}): {e}")
+                return None
+
+        urls = RPC_URLS or [RPC_URL]
+        if len(urls) == 1:
+            sig = await _send_one(urls[0])
+            if not sig:
+                logger.warning(f"RPC rejected (PP): single-RPC send failed")
+            return sig
+
+        # Race: first non-None signature wins, others are still in-flight
+        # but harmless — the network dedupes by signature.
+        tasks = [asyncio.create_task(_send_one(u)) for u in urls]
+        winner_sig = None
+        try:
+            while tasks:
+                done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                for t in done:
+                    sig = t.result()
+                    if sig:
+                        winner_sig = sig
+                        break
+                if winner_sig:
+                    for p in pending:
+                        p.cancel()
+                    break
+                tasks = list(pending)
+        except Exception as e:
+            logger.debug(f"PP multi-RPC race error: {e}")
+
+        if not winner_sig:
+            logger.warning(f"PP RPC race: all {len(urls)} endpoints failed")
+        return winner_sig
 
     async def _confirm(self, signature: str, max_wait: int = 30) -> bool:
         payload = {
@@ -132,24 +177,62 @@ class PumpPortalExecutor:
             "method": "getSignatureStatuses",
             "params": [[signature], {"searchTransactionHistory": True}]
         }
-        start = time.time()
-        while time.time() - start < max_wait:
+
+        async def _poll_one(url: str) -> dict | None:
+            """Single-RPC poll. Returns the status dict if the tx is confirmed
+            or finalized (with or without error); None otherwise."""
             try:
                 async with self.session.post(
-                    RPC_URL, json=payload,
+                    url, json=payload,
                     timeout=aiohttp.ClientTimeout(total=5)
                 ) as resp:
                     result = await resp.json()
                     statuses = result.get("result", {}).get("value", [])
                     if statuses and statuses[0]:
-                        status = statuses[0]
-                        if status.get("confirmationStatus") in ("confirmed", "finalized"):
-                            if status.get("err"):
-                                logger.warning(f"PP tx {signature[:20]} failed: {status['err']}")
-                                return False
-                            return True
+                        s = statuses[0]
+                        if s.get("confirmationStatus") in ("confirmed", "finalized"):
+                            return s
             except Exception:
                 pass
+            return None
+
+        urls = RPC_URLS or [RPC_URL]
+        start = time.time()
+        while time.time() - start < max_wait:
+            # Race all RPCs in parallel — first one to see "confirmed" wins.
+            # Hot RPCs see the slot first; this drops confirm tail latency.
+            tasks = [asyncio.create_task(_poll_one(u)) for u in urls]
+            try:
+                done, pending = await asyncio.wait(
+                    tasks, timeout=5, return_when=asyncio.FIRST_COMPLETED,
+                )
+            except Exception:
+                done, pending = set(), set(tasks)
+            status = None
+            for t in done:
+                s = t.result()
+                if s:
+                    status = s
+                    break
+            for p in pending:
+                p.cancel()
+            # Also drain remaining done tasks that weren't the winner — sometimes
+            # a slower RPC has the result first if the winner returned None.
+            for t in done:
+                if t.cancelled() or t.exception() is not None:
+                    continue
+                if status is None:
+                    s = t.result()
+                    if s:
+                        status = s
+                        break
+
+            if status is not None:
+                if status.get("err"):
+                    logger.warning(f"PP tx {signature[:20]} failed: {status['err']}")
+                    return False
+                return True
+
             await asyncio.sleep(2)
         return False
 
