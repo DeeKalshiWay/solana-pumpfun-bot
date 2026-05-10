@@ -37,7 +37,13 @@ BOT_WALLET_THRESHOLD  = 25     # mints bought to qualify as a bot
                                 # (lowered from 50 — no human buys 25+ pump.fun
                                 # launches; this catches more sniper bots
                                 # without meaningful false-positive risk)
-BUNDLE_WINDOW_S       = 4      # seconds after create to look for bundle
+BUNDLE_WINDOW_S       = 10     # seconds after create to look for bundle
+                                # (raised from 4 — D2 fix attempt: PumpPortal
+                                # subscribeTokenTrade has server-side latency
+                                # that exceeded the old 4s window, so 0/118K
+                                # mints were ever flagged. 10s gives the trade
+                                # events time to actually arrive before we
+                                # finalize the bundle decision.)
 BUNDLE_BUYER_LIMIT    = 5      # 5+ non-creator buyers in window = bundled
                                 # (raised from 2 — bundles can be legitimate
                                 # team launches; only the extreme coordinated

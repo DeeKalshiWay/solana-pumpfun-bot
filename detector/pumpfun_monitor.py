@@ -41,8 +41,13 @@ _WS_HEADERS = [
 ]
 
 
-TRADE_SUB_DURATION_S = 6   # how long to keep trade-events flowing per new mint
-                            # (slightly > BUNDLE_WINDOW_S=4 in wallet_intel for slack)
+TRADE_SUB_DURATION_S = 12  # how long to keep trade-events flowing per new mint
+                            # (slightly > BUNDLE_WINDOW_S=10 in wallet_intel for
+                            # slack — PumpPortal subscribeTokenTrade has
+                            # noticeable server-side latency, so we need the
+                            # subscription open long enough for events to
+                            # actually arrive before _finalize_bundle pops
+                            # the mint from observation)
 
 
 class PumpFunMonitor:
