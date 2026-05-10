@@ -127,3 +127,158 @@ That's a different bet:
 - [carson2222/pumpfun-bot](https://github.com/carson2222/pumpfun-bot)
 - [RugCheck.xyz](https://rugcheck.xyz/)
 - [Solsniffer.com](https://www.solsniffer.com/)
+
+---
+
+# REV 2 — Deeper analysis (2026-05-10)
+
+After the first pass I went back with more specific searches and read more credible sources. The first analysis was directionally right but missed concrete numbers and practical details. This section corrects/extends it.
+
+## Hard latency targets — what "competitive" actually means
+
+From [Dysnix's production-grade sniper bot blueprint](https://dysnix.com/blog/complete-stack-competitive-solana-sniper-bots) (the most concrete public writeup I found):
+
+| Stage | Elite target | Acceptable | Where we are |
+|-------|--------------|------------|--------------|
+| RPC response (`getSlot`, etc.) | **<40ms** | <50ms | ~50-150ms (Helius beta endpoint) |
+| Detection (event capture) | **<50ms** | 20-50ms polling | **~300-500ms** (PumpPortal WS aggregator) |
+| Tx construction → broadcast | **<100ms** | <150ms | ~300-700ms (PumpPortal API + sign + send) |
+| Full pipeline (detect → trade) | **<150ms** | <200ms | **~2-4 seconds** |
+| Win rate (top operators) | **>60%** | >50% | 67% historical (encouraging) |
+
+**Takeaway**: we're an order of magnitude slower on the hot path than the elite tier. Not surprising — PumpPortal is an aggregator, and tx construction goes through their HTTP API instead of being built locally. **The intelligence layer is what compensates** for the latency gap.
+
+## D3AD-E's 5ms tx-build claim — how it's actually achieved
+
+[D3AD-E/Solana-sniper-bot](https://github.com/D3AD-E/Solana-sniper-bot) claims "5ms tx build and send time to 4 providers" — concrete techniques:
+
+- **Native Rust module compiled via N-API** for tx construction (not interpreted JS/Python)
+- **Local Solana node** + Redis for hot-path state caching
+- **Multi-region deployment** with regional replicas
+- **Keep-alive HTTP connections** (no new TLS handshake per request)
+- **Shred access** for accelerated tx propagation
+- **4 providers**: 0slot, NextBlock, Astralane, Node1 (specific names)
+
+We hit none of this. We use Python (slower), a remote RPC (Helius), no local node, single-region, no Rust hot path.
+
+**The gap**: a TypeScript/Node N-API + Rust hybrid is 100-1000× faster than aiohttp Python on tx serialization. This is why most serious bots are Rust or TS-with-Rust.
+
+## Premium tx providers — pricing and tier landscape
+
+This is the part the first analysis lumped together. Here's actual pricing for the providers serious bots use:
+
+| Provider | Pricing | Notes |
+|----------|---------|-------|
+| **Jito Block Engine** | **Free** (1 req/sec/IP/region default) | sendTransaction with MEV protection. No auth needed. Add to `EXTRA_RPC_URLS` today. |
+| **0slot** | Free first week, then paid | Specifically built for "0-slot" inclusion. Free trial is worth running for 7 days. |
+| **NextBlock** | **~5 SOL/month (~$1,000)** | TX Stream API + sendTransaction relay. Paid via SOL transfer to `nextstream.sol`. |
+| **Astralane** | Paid, "institutional-grade" | Microsecond precision claims. Pricing not public. |
+| **Node1.io** | Paid | Used by D3AD-E. |
+| **BloxRoute** | Paid, ~$50-500/month tiers | Cross-chain. |
+| **Nozomi** | Paid | |
+| **LilJit** | Free | Trent.sol Jito derivative. |
+| **BlockRazor** | Paid | |
+| **PublicNode** | Free | Already in our config. Generic Solana RPC, not optimized for tx. |
+| **Helius** | $49+/mo (your tier) | Detection (LaserStream) + RPC + sendTransaction. |
+
+**Practical implication for $400 stakes**:
+- **Add for free**: Jito Block Engine (sendTransaction endpoint), LilJit, PublicNode
+- **Worth a free trial**: 0slot (1 week)
+- **Don't pay yet**: NextBlock at $1k/mo is way out of proportion to $400 stake. **Reconsider only if wallet grows to $5k+ where the marginal latency gain justifies $1k/mo.**
+
+## Jito Python SDK — bigger deal than I estimated
+
+I previously said "real Jito bundles = ~1 day rewrite." That was conservative. The official [`jito-py-rpc`](https://github.com/jito-labs/jito-py-rpc) library exists, with these methods:
+
+- `send_bundle` — submit up to 5 atomic txs
+- `send_transaction` — single tx via Jito with MEV protection
+- `get_bundle_statuses` — confirm landing
+- `get_inflight_bundle_statuses` — monitor recent (5-min) bundle history
+- `get_tip_accounts` — fetch the 8 designated tip accounts
+
+**Revised effort estimate**: ~4-6 hours for a basic Jito bundle integration. Steps:
+1. `pip install jito-py-rpc`
+2. Construct buy + tip-transfer-to-Jito-tip-account in a 2-tx bundle
+3. Submit via `send_bundle`
+4. Poll `get_bundle_statuses` for landing
+5. Test against `simulateBundle` first
+
+Still bigger work than multi-RPC race (which is shipped), but **half the effort I quoted in the first analysis**.
+
+## Tip economics — concrete numbers
+
+| Strategy | Required | Recommended |
+|----------|----------|-------------|
+| Single tx via Jito sendTransaction | None | **70% priority fee + 30% tip** |
+| Bundle via sendBundle | Tip only (no priority fee) | Query `bundles.jito.wtf/api/v1/bundles/tip_floor` for current 50th-percentile tip |
+| Minimum tip | **1,000 lamports (0.000001 SOL)** | Often need 10,000-100,000 lamports during competitive periods |
+
+**For our 0.06 SOL trade size**, tips of 0.001-0.005 SOL (1.7%-8.3% of trade) get bundles landing competitively. That's actually *cheaper* than our current `SELL_PRIORITY_FEE_SOL=0.005` (8.3% of trade) — Jito bundles could be a wash on cost while delivering atomic execution.
+
+## Geographic Jito endpoints — pick one closer to your trader
+
+Your trader runs from your Windows machine — assuming North America, the closest Jito Block Engine is:
+
+```
+https://ny.mainnet.block-engine.jito.wtf       # NYC — best for east coast US
+https://slc.mainnet.block-engine.jito.wtf      # Salt Lake City — best for west coast US
+```
+
+Replace the generic `https://mainnet.block-engine.jito.wtf` (which routes to whoever's closest, with extra hop) with the specific regional endpoint. **Saves 20-50ms per tx.**
+
+For Europe: `frankfurt`, `amsterdam`, `dublin`, `london`. Tokyo + Singapore for Asia.
+
+## Sandwich protection — `jitodontfront`
+
+A tx-protection pattern I missed in pass 1: include any pubkey starting with `jitodontfront` (e.g., `jitodontfront111111111111111111111111111111`) in your tx instructions. Bundles will only include the tx if it appears at index 0 — preventing a sandwich attacker from front-running a copy of your tx.
+
+**Worth adding** to our buy txs once we ship Jito bundles. Defensive, costs nothing.
+
+## Auction mechanics — what actually wins
+
+Bundles enter a priority auction every **50ms** at the Block Engine. Selection is **tip-to-compute-units efficiency**, not absolute tip.
+
+**Implication**: a small, lean bundle (1 tip + 1 swap, ~200K CU) with 0.002 SOL tip beats a fat bundle (3 swaps + tip, ~600K CU) with 0.003 SOL tip. **Compute budget management matters.** Our buys currently don't set a CU limit, which means they default to 200K — fine for pump.fun's simple swap, but worth measuring.
+
+## Updated "minimum execution upgrade" recommendation
+
+Replacing the §3 recommendation in the first analysis. Here's the **immediate, free, concrete upgrade**:
+
+```env
+# .env
+RPC_URL=<your-helius-laserstream-url>
+
+# Free additions — no signup, racing happens automatically
+EXTRA_RPC_URLS=https://ny.mainnet.block-engine.jito.wtf/api/v1/transactions,https://slc.mainnet.block-engine.jito.wtf/api/v1/transactions,https://solana-rpc.publicnode.com
+```
+
+Three lanes, geo-optimized for North America, no payment beyond Helius. Activate before $400 deployment.
+
+**Then for Jito bundles** (next focused session): `pip install jito-py-rpc`, build the 2-tx (buy + tip) bundle wrapper, replace `_sign_and_send` for buys only. Keep the multi-RPC race as the sell path because sells need atomicity less than buys do.
+
+## What I missed in pass 1 (honest)
+
+1. **Premium tx providers cost real money** — I didn't price them. Some (NextBlock $1k/mo) are way overkill for $400 stake.
+2. **Jito has a Python SDK** — I estimated rewrite effort assuming we'd build from protobuf. The SDK halves the effort.
+3. **Jito has 9 geo endpoints** — using the generic URL costs 20-50ms vs picking your nearest.
+4. **`jitodontfront` sandwich protection** — defensive pattern I should have flagged.
+5. **Concrete latency targets** (<150ms full pipeline) — I said "faster than us" without numbers.
+6. **D3AD-E's specific tech stack** — the Rust N-API hybrid is *the* answer to Python's serialization slowness.
+
+## Sources (rev 2 — additional)
+
+- [Dysnix: Complete Stack for Competitive Solana Sniper Bots (2026)](https://dysnix.com/blog/complete-stack-competitive-solana-sniper-bots)
+- [Dysnix: Top Solana Sniper Bots (2026)](https://dysnix.com/blog/top-solana-sniper-bot)
+- [QuickNode: Top 10 Solana Sniper Bots (2026)](https://www.quicknode.com/builders-guide/best/top-10-solana-sniper-bots)
+- [Jito Labs: Low Latency Tx Send](https://docs.jito.wtf/lowlatencytxnsend/)
+- [Jito Python SDK (`jito-py-rpc`)](https://github.com/jito-labs/jito-py-rpc)
+- [Helius LaserStream](https://www.helius.dev/laserstream)
+- [Helius Yellowstone gRPC docs](https://www.helius.dev/docs/grpc)
+- [QuickNode Yellowstone gRPC Python tutorial](https://www.quicknode.com/docs/solana/yellowstone-grpc/overview/python)
+- [D3AD-E/Solana-sniper-bot](https://github.com/D3AD-E/Solana-sniper-bot)
+- [0slot.trade](https://0slot.trade/)
+- [Astralane](https://astralane.io/)
+- [NextBlock TX Stream API](https://docs.nextblock.io/api/tx-stream)
+- [vvizardev/solana-relayer-adapter-rust](https://github.com/vvizardev/solana-relayer-adapter-rust) — unified relayer adapter (Rust)
+- [roswelly/solana-block-engine-client](https://github.com/roswelly/solana-block-engine-client) — Rust client supporting Jito/Nozomi/ZeroSlot/BlockRazor/Astralane/NextBlock
+- [Bundles tip floor API](https://bundles.jito.wtf/api/v1/bundles/tip_floor)
