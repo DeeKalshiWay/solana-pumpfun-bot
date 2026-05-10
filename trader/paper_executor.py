@@ -201,8 +201,16 @@ class PaperExecutor:
             "timestamp":       time.time(),
         }
 
+    async def prebuild_sell_tx(self, token_mint: str) -> bytes | None:
+        """Paper mode: no real tx to build. Compat shim so risk_manager's
+        prebuild fast-path doesn't AttributeError when paper mode is on."""
+        return None
+
     # ── SELL ──────────────────────────────────────────────────────────────────
-    async def sell(self, token_mint: str, token_amount_raw, reason: str = "exit") -> dict:
+    async def sell(self, token_mint: str, token_amount_raw, reason: str = "exit",
+                   prebuilt_tx: bytes | None = None) -> dict:
+        # prebuilt_tx is ignored in paper mode (no real tx). Param exists so
+        # the kwarg from risk_manager._force_sell doesn't crash.
         # Network fee on exit too
         self.wallet.deduct(NETWORK_FEE_SOL)
 

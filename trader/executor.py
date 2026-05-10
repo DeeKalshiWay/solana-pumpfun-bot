@@ -224,9 +224,23 @@ class TradeExecutor:
 
         return await self.pumpportal.buy(token_mint, sol_amount)
 
-    async def sell(self, token_mint: str, token_amount_raw, reason: str = "exit") -> dict:
-        """Smart sell: try Jupiter first, fall back to PumpPortal."""
+    async def sell(self, token_mint: str, token_amount_raw, reason: str = "exit",
+                   prebuilt_tx: bytes | None = None) -> dict:
+        """Smart sell: try Jupiter first, fall back to PumpPortal.
+
+        prebuilt_tx (optional): pre-built PumpPortal sell tx bytes — when present
+        we skip Jupiter and go straight to PumpPortal so the prebuild fast-path
+        actually fires. Without this passthrough the kwarg crashes the call with
+        TypeError on every emergency exit.
+        """
         logger.info(f"[SELL] {token_mint[:8]}... | reason={reason}")
+
+        # Prebuilt tx → skip Jupiter, send directly via PumpPortal. The whole
+        # point of the prebuilt is to avoid the _build_tx roundtrip on the
+        # emergency-exit path.
+        if prebuilt_tx is not None:
+            return await self.pumpportal.sell(token_mint, token_amount_raw, reason,
+                                              prebuilt_tx=prebuilt_tx)
 
         # Only try Jupiter if we have a raw count (not a % string)
         if isinstance(token_amount_raw, int) and token_amount_raw > 0:
@@ -241,3 +255,9 @@ class TradeExecutor:
 
         # Percentage string or unknown amount → PumpPortal directly
         return await self.pumpportal.sell(token_mint, token_amount_raw, reason)
+
+    async def prebuild_sell_tx(self, token_mint: str) -> bytes | None:
+        """Delegate to PumpPortal — only the bonding-curve venue supports the
+        prebuild path right now (Jupiter quotes are time-sensitive, can't be
+        cached). Returns None if construction fails."""
+        return await self.pumpportal.prebuild_sell_tx(token_mint)
