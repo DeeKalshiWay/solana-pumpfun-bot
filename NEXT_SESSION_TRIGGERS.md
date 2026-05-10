@@ -10,9 +10,12 @@ Scan this file. If any trigger condition is met, surface it to the operator befo
 ### Wait condition
 
 ANY of:
-- Wallet has reached **≥4 SOL** (doubled from $400 / 2 SOL starting capital)
-- **100+ trades** have closed at the new config (0.06 SOL/trade, TP 50/100/500%, rug memory live) AND the trade-DB shows **positive cumulative PnL_sol** over those 100 trades
+- Wallet has reached **≥7 SOL** (+50% from ~4.7 SOL $400-at-$85/SOL starting capital)
+- **100+ trades** have closed at the new config (0.10 SOL/trade, TP 50/100/500%, rug memory live) AND the trade-DB shows **positive cumulative PnL_sol** of at least **+0.3 SOL** over those 100 trades
 - Operator explicitly says "ship Jito bundles" overriding the gate
+
+> Threshold corrected 2026-05-10: previous version used 4 SOL based on $200/SOL
+> assumption (would have fired below starting balance at the actual $85/SOL price).
 
 ### How to verify the trigger fired
 
@@ -44,9 +47,9 @@ new_pnl = sum(t.get('pnl_sol', 0) for t in new_trades)
 print(f'Wallet:                    {balance:.4f} SOL')
 print(f'Trades since new config:   {len(new_trades)}')
 print(f'PnL since new config:      {new_pnl:+.4f} SOL')
-print(f'Trigger 1 fires if:        wallet >= 4 SOL  OR  (>= 100 trades AND PnL > 0)')
-print(f'  Wallet condition:        {\"MET\" if balance >= 4 else \"not met\"}')
-print(f'  Trade-count condition:   {\"MET\" if len(new_trades) >= 100 and new_pnl > 0 else \"not met\"}')
+print(f'Trigger 1 fires if:        wallet >= 7 SOL  OR  (>= 100 trades AND PnL >= +0.3 SOL)')
+print(f'  Wallet condition:        {\"MET\" if balance >= 7 else \"not met\"}')
+print(f'  Trade-count condition:   {\"MET\" if len(new_trades) >= 100 and new_pnl >= 0.3 else \"not met\"}')
 "
 ```
 
@@ -137,7 +140,7 @@ NONE — this is a known bug. Ship whenever there's bandwidth. **Lower priority 
 
 Both:
 - Trigger 1 has fired AND been shipped (Jito bundles deployed)
-- Wallet ≥ 5 SOL
+- Wallet ≥ 9 SOL (~$765 at $85/SOL — proven 2× from starting capital)
 
 ### Work
 

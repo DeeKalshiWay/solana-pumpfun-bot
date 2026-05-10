@@ -34,12 +34,12 @@ Run this in order. Don't fund the wallet until every box is green.
 - [ ] `git log --oneline | head -3` — top commit must be **`dffe427`** or newer
 - [ ] `python -c "from trader.executor import TradeExecutor; import inspect; print(inspect.signature(TradeExecutor.sell))"` — must show `prebuilt_tx: bytes | None = None` in the signature
 
-### 1.2 .env is correct
+### 1.2 .env is correct (recalibrated for ~4.7 SOL wallet at $85/SOL)
 
-- [ ] `MAX_SOL_PER_TRADE=0.06` (not 0.085, not 0.10)
-- [ ] `MAX_POSITION_PCT=0.20` (so 20% × 2 SOL = 0.4 SOL absolute, capped at 0.06)
-- [ ] `MAX_TOTAL_EXPOSURE_SOL=0.50`
-- [ ] `MAX_OPEN_POSITIONS=4`
+- [ ] `MAX_SOL_PER_TRADE=0.10` (was 0.06 — friction drops from 15% → ~10% at 0.10)
+- [ ] `MAX_POSITION_PCT=0.025` (was 0.20 — sizes correctly against the larger wallet)
+- [ ] `MAX_TOTAL_EXPOSURE_SOL=0.80` (was 0.50 — ~17% of wallet exposed at full deploy)
+- [ ] `MAX_OPEN_POSITIONS=8` (was 4 — 8 × 0.10 = 0.80 SOL matches exposure cap)
 - [ ] `ADAPTIVE_HOT_MULT=1.2` (not 2.0 — 2.0 was punishing during hot streaks)
 - [ ] `ADAPTIVE_COLD_MULT=0.6`
 - [ ] `STOP_LOSS_PCT=7`
@@ -53,13 +53,13 @@ Run this in order. Don't fund the wallet until every box is green.
 
 - [ ] **Helius paid tier active** — confirm at helius.dev billing page
 - [ ] `RPC_URL=` your Helius URL (already set)
-- [ ] **Add to `.env`**:
+- [ ] **Add to `.env`** (geo-optimized for west coast operator):
   ```env
-  EXTRA_RPC_URLS=https://mainnet.block-engine.jito.wtf/api/v1/transactions,https://solana-rpc.publicnode.com
+  EXTRA_RPC_URLS=https://ny.mainnet.block-engine.jito.wtf/api/v1/transactions,https://slc.mainnet.block-engine.jito.wtf/api/v1/transactions,https://solana-rpc.publicnode.com
   ```
-  - Jito Block Engine: faster + MEV-protected (no auth required for sendTransaction)
-  - PublicNode: free fallback, no signup
-- [ ] After restart: log line `RPC_URLS configured: 3` should appear (or check `/api/status` — there's no exposed field for this yet, so check via `python -c "from config import RPC_URLS; print(len(RPC_URLS))"`)
+  - Jito Block Engine NY + SLC (west coast: SLC will win the race naturally)
+  - PublicNode: free 4th lane fallback
+- [ ] After restart, verify all 4 lanes loaded: `python -c "from config import RPC_URLS; print(len(RPC_URLS))"` — should print `4`
 
 ### 1.4 Sanity boot
 
@@ -94,25 +94,57 @@ Run this in order. Don't fund the wallet until every box is green.
 
 ## §2 SIZING & RISK ENVELOPE
 
-**Wallet**: 2 SOL (~$400 at $200/SOL, adjust to your actual SOL price)
+**Wallet**: ~4.7 SOL (~$400 at $85/SOL — adjust for your actual SOL price at deploy)
 
-| Setting | Value | What it actually means |
-|---------|-------|------------------------|
-| Trade size (normal) | **0.06 SOL** | min(0.06, 0.20 × 2.0) = 0.06 cap |
-| Trade size (cold WR) | **0.036 SOL** | 0.6× mult (auto-adapts after losses) |
-| Trade size (hot WR) | **0.072 SOL** | 1.2× mult (auto-adapts after wins) |
-| Max parallel positions | 4 | 4 × 0.06 = 0.24 SOL exposure max |
-| Total exposure cap | 0.50 SOL | binds before MAX_OPEN binds |
-| Wallet "danger zone" | **<0.5 SOL** | below this, friction returns |
+> ⚠️ **CORRECTION (2026-05-10)**: earlier version of this doc assumed $200/SOL ($400 = 2 SOL).
+> At $85/SOL, $400 actually buys **4.7 SOL** — more than 2× the buying power. Sizing
+> recommendations below are recalibrated for the larger wallet. **Update your `.env`
+> to the values in §2.1 before the roll** — the previous 0.06 SOL trade cap would
+> leave 95% of your capital idle.
 
-**Worst-case scenarios (sized for 2 SOL wallet)**:
+### 2.1 Recommended `.env` values for ~4.7 SOL wallet
 
-- **All 4 positions rug at −7% stop-loss simultaneously**: 4 × 0.06 × 0.07 = **−0.0168 SOL** (−0.84% of wallet) — survivable
-- **All 4 rug past stop-loss to −40% (slippage-driven)**: 4 × 0.06 × 0.40 = **−0.096 SOL** (−4.8% of wallet) — uncomfortable but survivable
-- **Loss streak of 4** → automatic 5-minute pause (set in your .env)
+```env
+MAX_SOL_PER_TRADE=0.10
+MAX_POSITION_PCT=0.025
+MAX_TOTAL_EXPOSURE_SOL=0.80
+MAX_OPEN_POSITIONS=8
+ADAPTIVE_HOT_MULT=1.2
+ADAPTIVE_COLD_MULT=0.6
+```
+
+### 2.2 What those values produce
+
+| Setting | Value | What it actually means at 4.7 SOL wallet |
+|---------|-------|------------------------------------------|
+| Trade size (normal) | **0.10 SOL** (~$8.50) | min(0.10, 0.025 × 4.7) = min(0.10, 0.118) = 0.10 cap binds |
+| Trade size (cold WR) | **0.060 SOL** | 0.6× mult |
+| Trade size (hot WR) | **0.120 SOL** | 1.2× mult — still under ADAPTIVE_HARD_CAP_MULT=2.5 ceiling |
+| Max parallel positions | 8 | 8 × 0.10 = 0.80 SOL exposure cap |
+| Total exposure cap | 0.80 SOL | ~17% of wallet — binds at the same point as max-open |
+| Wallet "danger zone" | **<1.0 SOL** | below this, position sizing drops below friction floor |
+
+### 2.3 Worst-case scenarios at 4.7 SOL wallet
+
+- **All 8 positions rug at −7% stop-loss simultaneously**: 8 × 0.10 × 0.07 = **−0.056 SOL** (−1.2% of wallet) — easy
+- **All 8 rug past stop-loss to −40% (slippage-driven)**: 8 × 0.10 × 0.40 = **−0.32 SOL** (−6.8% of wallet) — uncomfortable but survivable
+- **Loss streak of 4** → automatic 5-minute pause
 - **Total exposure cap hit** → no new buys until something exits
 
-**Kelly note**: at 67% historical WR with avg-win ≈ 0.0073 SOL and avg-loss ≈ 0.0151 SOL on 0.06 trades, Kelly fraction is ~7% per trade. Your `MAX_POSITION_PCT=0.20` is **2.85× Kelly**. That's aggressive but defensible because (a) WR likely overstated due to staged-exit underreporting, (b) you want enough size to escape friction.
+### 2.4 Why size up at the larger wallet
+
+The friction-floor math at 0.10 SOL trade:
+- Fixed friction (priority fee + slippage): ~0.005 SOL = **5% drag** (vs 8.3% at 0.06)
+- +25% TP1 hit on 0.10 SOL = +0.025 SOL gross → **+0.020 SOL net** after friction
+- −7% stop loss on 0.10 SOL = −0.007 → **−0.012 SOL net** after friction
+
+At 67% historical WR, EV = `0.67 × 0.020 + 0.33 × −0.012 = +0.0094 SOL/trade` — **clearly positive**.
+
+At the original 0.06 SOL sizing, EV was ≈ 0 (the +0.037 SOL profit number from your 295-trade history).
+
+### 2.5 Kelly note
+
+At 67% WR, avg-win 0.020 SOL, avg-loss 0.012 SOL on 0.10 trades, Kelly fraction is ~14% per trade. Your `MAX_POSITION_PCT=0.025` is **~0.2× Kelly** (well below Kelly criterion). That's intentionally conservative for the first 100 trades — you're paying for variance reduction while validating that the strategy edge survives at this size. Bump toward Kelly once you have 200+ trades of new-config data.
 
 ---
 
@@ -154,28 +186,28 @@ After restart, every buy/sell tx fans out to all 3 endpoints simultaneously. Fir
 **Pre-roll**:
 1. Run §1 checklist top to bottom. EVERY BOX.
 2. Verify wallet balance is correct: `python -c "import asyncio; from trader.wallet import SolanaWallet; w=SolanaWallet(); asyncio.run(w.start()); print(asyncio.run(w.get_sol_balance()))"`
-3. Confirm dashboard shows expected sizing on startup logs (`Position size: 0.06 SOL` not `Position size: 0.0144 SOL`)
+3. Confirm dashboard shows expected sizing on startup logs (`Position size: 0.10 SOL` not `Position size: 0.0144 SOL`)
 4. **Set a kitchen timer for 4 hours.** First sit-down review at hour 4.
 
-**During the roll**:
+**During the roll** (thresholds calibrated for ~4.7 SOL starting wallet at $85/SOL):
 
 | Hour | What to check |
 |------|---------------|
 | 0:00 | Bot up, dashboard at http://127.0.0.1:8765/, EMERGENCY STOP visible & green |
-| 0:15 | First trade should have happened. Dashboard "Closed trades" > 0. Friction in PnL math should be < 25% (if higher, sizing is wrong) |
+| 0:15 | First trade should have happened. Dashboard "Closed trades" > 0. Friction in PnL math should be < 15% per round-trip (if higher, sizing is wrong) |
 | 1:00 | At least 3-5 trades closed. WR should be in 50-70% range. Auto-tuner offset still 0 or moving by ±1 |
-| 2:00 | If wallet has dropped >10% (>0.2 SOL): **PRESS EMERGENCY STOP**. Something is wrong. |
+| 2:00 | If wallet has dropped **>10% (>0.47 SOL)**: **PRESS EMERGENCY STOP**. Something is wrong. |
 | 4:00 | **First sit-down review**. Compare to morning's 295-trade baseline:<br>• Is avg_win > avg_loss × 0.5? (if no, friction-floor not cleared)<br>• Are TP1 and TP2 firing? (if no, TPs are too high) |
-| 8:00 | Half-day review. If wallet < 1.7 SOL, pause and reassess. If wallet > 2.2 SOL, **log everything you did**. |
+| 8:00 | Half-day review. If wallet **< 4.0 SOL** (−15% from start), pause and reassess. If wallet **> 5.5 SOL** (+17%), **log everything you did**. |
 | 24:00 | Daily email lands at midnight. Read it carefully. |
 
-**Kill triggers — STOP IMMEDIATELY**:
+**Kill triggers — STOP IMMEDIATELY** (recalibrated for ~4.7 SOL wallet):
 
-- Wallet drops **>15%** in any single hour (>0.3 SOL/hr) → EMERGENCY STOP, investigate
+- Wallet drops **>15% in any single hour** (>0.7 SOL/hr) → EMERGENCY STOP, investigate
 - 5 consecutive `Risk monitor error` lines in `logs/pump_bot.log` → kill bot, debug
 - Any `Force-sell failed` repeating for the same mint > 5 times → manual sell via dump_orphans
 - Any new `tokens_unresolved` log line — buy succeeded but tokens didn't appear → likely wrong decimals → investigate before next trade
-- Bot tries to open >0.10 SOL trade (sizing config not loaded) → kill, fix config, restart
+- Bot tries to open **>0.15 SOL trade** (sizing config not loaded — should never exceed 0.10 normal / 0.12 hot-mult) → kill, fix config, restart
 
 **Don't trigger**:
 - Loss streak pause (auto-handled, 5-min cooldown)
