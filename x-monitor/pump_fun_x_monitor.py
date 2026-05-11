@@ -31,15 +31,15 @@ Example run (every 5 minutes, high-signal pumps only):
 The agent will print alerts to console and append structured data to the log file.
 """
 
-import tweepy
-import time
-import os
-import json
-import re
 import argparse
+import json
+import os
+import time
 from datetime import datetime, timezone
-from typing import Set, List, Dict, Optional
-import requests  # for optional Telegram
+from typing import Optional
+
+import requests
+import tweepy
 
 # ==================== CONFIG ====================
 DEFAULT_QUERY = (
@@ -52,11 +52,11 @@ SEEN_FILE = "seen_tweet_ids.json"
 LOG_FILE_DEFAULT = "pump_fun_pumps.jsonl"
 
 
-def load_seen_ids(filepath: str = SEEN_FILE) -> Set[int]:
+def load_seen_ids(filepath: str = SEEN_FILE) -> set[int]:
     """Load previously seen tweet IDs from disk (persists across restarts)."""
     if os.path.exists(filepath):
         try:
-            with open(filepath, "r", encoding="utf-8") as f:
+            with open(filepath, encoding="utf-8") as f:
                 data = json.load(f)
                 return set(data.get("ids", []))
         except Exception:
@@ -64,17 +64,24 @@ def load_seen_ids(filepath: str = SEEN_FILE) -> Set[int]:
     return set()
 
 
-def save_seen_ids(seen: Set[int], filepath: str = SEEN_FILE):
+def save_seen_ids(seen: set[int], filepath: str = SEEN_FILE):
     """Persist seen IDs (keep only last ~5000 to avoid huge file)."""
     try:
         ids = sorted(list(seen))[-5000:]  # keep recent 5k
         with open(filepath, "w", encoding="utf-8") as f:
-            json.dump({"ids": ids, "updated": datetime.now(timezone.utc).isoformat()}, f, indent=2)
+            json.dump(
+                {
+                    "ids": ids,
+                    "updated": datetime.now(datetime.UTC).isoformat(),
+                },
+                f,
+                indent=2,
+            )
     except Exception as e:
         print(f"[WARN] Could not save seen IDs: {e}")
 
 
-def save_alerts(alerts: List[Dict], log_file: str):
+def save_alerts(alerts: list[dict], log_file: str):
     """Append alerts to JSONL log file."""
     if not alerts:
         return
@@ -87,7 +94,7 @@ def save_alerts(alerts: List[Dict], log_file: str):
         print(f"[ERROR] Failed to write log: {e}")
 
 
-def send_telegram_alert(token: str, chat_id: str, alert: Dict):
+def send_telegram_alert(token: str, chat_id: str, alert: dict):
     """Send formatted alert to Telegram (optional)."""
     if not token or not chat_id:
         return
@@ -107,7 +114,7 @@ def send_telegram_alert(token: str, chat_id: str, alert: Dict):
             "chat_id": chat_id,
             "text": text,
             "parse_mode": "HTML",
-            "disable_web_page_preview": False
+            "disable_web_page_preview": False,
         }
         resp = requests.post(url, json=payload, timeout=10)
         if resp.status_code != 200:
@@ -116,11 +123,13 @@ def send_telegram_alert(token: str, chat_id: str, alert: Dict):
         print(f"[TELEGRAM] Failed to send: {e}")
 
 
-def print_alert(alert: Dict):
+def print_alert(alert: dict):
     """Pretty print alert to console."""
     print("\n" + "=" * 70)
     print(f"🚀 NEW PUMP.FUN PUMP DETECTED @ {alert['timestamp']}")
-    print(f"👤 @{alert['author']} ({alert['followers']:,} followers) | {alert['author_name']}")
+    print(
+        f"👤 @{alert['author']} ({alert['followers']:,} followers) | {alert['author_name']}"
+    )
     print(f"❤️ {alert['likes']:,} likes | 🔁 {alert['retweets']:,} retweets")
     print(f"📝 {alert['text']}")
     print(f"🔗 {alert['url']}")
@@ -129,7 +138,7 @@ def print_alert(alert: Dict):
     print("=" * 70 + "\n")
 
 
-def extract_pump_link(tweet) -> Optional[str]:
+def extract_pump_link(tweet) -> str | None:
     """Extract first pump.fun link from tweet entities if present."""
     if not hasattr(tweet, "entities") or not tweet.entities:
         return None
@@ -150,28 +159,56 @@ Examples:
   python pump_fun_x_monitor.py
   python pump_fun_x_monitor.py --min-followers 50000 --min-likes 100 --interval 180
   python pump_fun_x_monitor.py --telegram-bot-token YOUR_BOT_TOKEN --telegram-chat-id YOUR_CHAT_ID
-        """
+        """,
     )
-    parser.add_argument("--bearer-token", default=os.getenv("X_BEARER_TOKEN"),
-                        help="X API Bearer Token (or set X_BEARER_TOKEN env var)")
-    parser.add_argument("--min-followers", type=int, default=20000,
-                        help="Minimum followers the posting account must have (default: 20000)")
-    parser.add_argument("--min-likes", type=int, default=50,
-                        help="Minimum likes on the tweet (client-side filter, default: 50)")
-    parser.add_argument("--min-faves-query", type=int, default=30,
-                        help="min_faves: value in the X search query (default: 30)")
-    parser.add_argument("--interval", type=int, default=300,
-                        help="Polling interval in seconds (default: 300 = 5 minutes)")
-    parser.add_argument("--log-file", default=LOG_FILE_DEFAULT,
-                        help="Path to JSONL log file for alerts")
-    parser.add_argument("--seen-file", default=SEEN_FILE,
-                        help="Path to persist seen tweet IDs")
-    parser.add_argument("--telegram-bot-token", default=os.getenv("TELEGRAM_BOT_TOKEN"),
-                        help="Telegram bot token for alerts (optional)")
-    parser.add_argument("--telegram-chat-id", default=os.getenv("TELEGRAM_CHAT_ID"),
-                        help="Telegram chat ID to send alerts to (optional)")
-    parser.add_argument("--query", default=DEFAULT_QUERY,
-                        help="Custom X search query (advanced users)")
+    parser.add_argument(
+        "--bearer-token",
+        default=os.getenv("X_BEARER_TOKEN"),
+        help="X API Bearer Token (or set X_BEARER_TOKEN env var)",
+    )
+    parser.add_argument(
+        "--min-followers",
+        type=int,
+        default=20000,
+        help="Minimum followers the posting account must have (default: 20000)",
+    )
+    parser.add_argument(
+        "--min-likes",
+        type=int,
+        default=50,
+        help="Minimum likes on the tweet (client-side filter, default: 50)",
+    )
+    parser.add_argument(
+        "--min-faves-query",
+        type=int,
+        default=30,
+        help="min_faves: value in the X search query (default: 30)",
+    )
+    parser.add_argument(
+        "--interval",
+        type=int,
+        default=300,
+        help="Polling interval in seconds (default: 300 = 5 minutes)",
+    )
+    parser.add_argument(
+        "--log-file", default=LOG_FILE_DEFAULT, help="Path to JSONL log file for alerts"
+    )
+    parser.add_argument(
+        "--seen-file", default=SEEN_FILE, help="Path to persist seen tweet IDs"
+    )
+    parser.add_argument(
+        "--telegram-bot-token",
+        default=os.getenv("TELEGRAM_BOT_TOKEN"),
+        help="Telegram bot token for alerts (optional)",
+    )
+    parser.add_argument(
+        "--telegram-chat-id",
+        default=os.getenv("TELEGRAM_CHAT_ID"),
+        help="Telegram chat ID to send alerts to (optional)",
+    )
+    parser.add_argument(
+        "--query", default=DEFAULT_QUERY, help="Custom X search query (advanced users)"
+    )
 
     args = parser.parse_args()
 
@@ -183,27 +220,31 @@ Examples:
     # Build dynamic query with user-provided min_faves
     query = args.query.replace("min_faves:30", f"min_faves:{args.min_faves_query}")
 
-    print(f"🚀 Starting Pump.fun X Monitor Agent")
+    print("🚀 Starting Pump.fun X Monitor Agent")
     print(f"   Query: {query[:120]}...")
     print(f"   Min followers: {args.min_followers:,}")
     print(f"   Min likes (client): {args.min_likes}")
     print(f"   Poll every: {args.interval}s")
     print(f"   Log file: {args.log_file}")
-    print(f"   Telegram alerts: {'ENABLED' if args.telegram_bot_token and args.telegram_chat_id else 'disabled'}")
+    print(
+        f"   Telegram alerts: {'ENABLED' if args.telegram_bot_token and args.telegram_chat_id else 'disabled'}"
+    )
     print("-" * 70)
 
     client = tweepy.Client(
         bearer_token=args.bearer_token,
-        wait_on_rate_limit=True,   # auto-handles some rate limits
-        return_type=dict           # easier handling
+        wait_on_rate_limit=True,  # auto-handles some rate limits
+        return_type=dict,  # easier handling
     )
 
-    seen: Set[int] = load_seen_ids(args.seen_file)
+    seen: set[int] = load_seen_ids(args.seen_file)
     print(f"[INFO] Loaded {len(seen)} previously seen tweet IDs")
 
     while True:
         try:
-            print(f"\n[{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}] Searching X...")
+            print(
+                f"\n[{datetime.now(datetime.UTC).strftime('%Y-%m-%d %H:%M:%S UTC')}] Searching X..."
+            )
 
             response = client.search_recent_tweets(
                 query=query,
@@ -211,7 +252,7 @@ Examples:
                 tweet_fields=["created_at", "public_metrics", "text", "id", "entities"],
                 user_fields=["username", "name", "public_metrics", "verified"],
                 expansions=["author_id"],
-                sort_order="recency"   # newest first
+                sort_order="recency",  # newest first
             )
 
             if not response or not response.get("data"):
@@ -219,9 +260,12 @@ Examples:
                 time.sleep(args.interval)
                 continue
 
-            users = {u["id"]: u for u in response.get("includes", {}).get("users", [])}
+            users = {
+                u["id"]: u
+                for u in response.get("includes", {}).get("users", [])
+            }
 
-            new_alerts: List[Dict] = []
+            new_alerts: list[dict] = []
 
             for tweet in response["data"]:
                 tweet_id = tweet["id"]
@@ -232,7 +276,9 @@ Examples:
                 if not author:
                     continue
 
-                followers = author.get("public_metrics", {}).get("followers_count", 0)
+                followers = author.get("public_metrics", {}).get(
+                    "followers_count", 0
+                )
                 if followers < args.min_followers:
                     continue
 
@@ -244,18 +290,20 @@ Examples:
                 seen.add(tweet_id)
 
                 alert = {
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "timestamp": datetime.now(datetime.UTC).isoformat(),
                     "tweet_id": tweet_id,
                     "author": author.get("username"),
                     "author_name": author.get("name"),
                     "followers": followers,
                     "likes": likes,
-                    "retweets": tweet.get("public_metrics", {}).get("retweet_count", 0),
+                    "retweets": tweet.get("public_metrics", {}).get(
+                        "retweet_count", 0
+                    ),
                     "replies": tweet.get("public_metrics", {}).get("reply_count", 0),
                     "text": tweet.get("text", ""),
                     "url": f"https://x.com/{author.get('username')}/status/{tweet_id}",
                     "pump_link": extract_pump_link(tweet),
-                    "created_at": tweet.get("created_at")
+                    "created_at": tweet.get("created_at"),
                 }
 
                 new_alerts.append(alert)
@@ -263,7 +311,9 @@ Examples:
 
                 # Optional Telegram push
                 if args.telegram_bot_token and args.telegram_chat_id:
-                    send_telegram_alert(args.telegram_bot_token, args.telegram_chat_id, alert)
+                    send_telegram_alert(
+                        args.telegram_bot_token, args.telegram_chat_id, alert
+                    )
 
             if new_alerts:
                 save_alerts(new_alerts, args.log_file)
