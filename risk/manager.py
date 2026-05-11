@@ -282,7 +282,7 @@ class RiskManager:
         # Daily baseline reset on UTC date change. Baseline is total EQUITY
         # (liquid SOL + market value of any positions held over midnight) so
         # we can compare like-to-like to current equity below.
-        today = datetime.datetime.utcnow().date()
+        today = datetime.datetime.now(datetime.UTC).date()
         if self.day_baseline_date != today:
             sol = await self.wallet.get_sol_balance()
             held = sum(p.current_price * p.tokens_held for p in self.positions.values())

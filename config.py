@@ -61,8 +61,8 @@ def _env_json(name: str, default):
 PAPER_TRADING       = _env_bool("PAPER_TRADING", True)   # Safe default: paper.
                                                           # Set PAPER_TRADING=false in
                                                           # .env to enable real-money trading.
-PAPER_STARTING_SOL  = 1.0    # Virtual SOL balance for paper mode
-PAPER_TIME_EXIT_MIN = 10      # Force-exit paper positions after N minutes
+PAPER_STARTING_SOL  = _env_float("PAPER_STARTING_SOL", 1.0)  # Virtual SOL balance for paper mode
+PAPER_TIME_EXIT_MIN = _env_int  ("PAPER_TIME_EXIT_MIN", 10)  # Force-exit paper positions after N minutes
 
 # ─── WALLET ────────────────────────────────────────────────────────────────────
 PRIVATE_KEY    = os.getenv("SOLANA_PRIVATE_KEY", "YOUR_PRIVATE_KEY_HERE")
@@ -263,6 +263,16 @@ EARLY_RUG_WINDOW_SEC = _env_int  ("EARLY_RUG_WINDOW_SEC",  60)
 # to logs/candidate_queue.jsonl so the control bot can post it for manual
 # yes/no review. Range is [SMART_CALLER_MIN, MIN_BUY_SCORE-1].
 SMART_CALLER_MIN = _env_int("SMART_CALLER_MIN", 20)
+
+# Signal fusion: alignment bonus added AFTER the four-factor score when
+# independent signals co-fire (e.g. X mention + smart-money buyer). Caps
+# are deliberately small — fusion is a tie-breaker, not a primary factor.
+# See analyzer/signal_fusion.py for the pattern catalog.
+# Disable via FUSION_ENABLED=0 in .env if a holdout audit shows it's
+# pulling EV in the wrong direction.
+FUSION_ENABLED      = _env_bool ("FUSION_ENABLED",      True)
+FUSION_MAX_BONUS    = _env_int  ("FUSION_MAX_BONUS",    15)
+FUSION_MAX_PENALTY  = _env_int  ("FUSION_MAX_PENALTY",  10)
 
 # Creators that produced rugs we've already lost on, OR rugged after we
 # rejected their token. Block at trade-loop level so we never enter again.

@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pump Bot · Live Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --gold:       #ffc800;
+    --gold-dim:   rgba(255,200,0,0.13);
+    --gold-faint: rgba(255,200,0,0.05);
+    --bg:         #07090c;
+    --panel:      #0c0f14;
+    --text:       #ddd4b8;
+    --text-dim:   rgba(221,212,184,0.55);
+    --green:      #00dd77;
+    --red:        #ff4040;
+    --blue:       #4db8ff;
+    --orange:     #ff9933;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'DM Mono', monospace;
+    min-height: 100vh;
+    line-height: 1.5;
+    overflow-x: hidden;
+  }
+  body::before {
+    content: ''; position: fixed; inset: 0;
+    background-image:
+      linear-gradient(rgba(255,200,0,0.022) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,200,0,0.022) 1px, transparent 1px);
+    background-size: 44px 44px;
+    pointer-events: none; z-index: 0;
+  }
+  @keyframes scan { 0%{transform:translateY(-5px)} 100%{transform:translateY(100vh)} }
+  .scanline {
+    position: fixed; top:0; left:0; right:0; height:2px;
+    background: linear-gradient(transparent, rgba(255,200,0,0.07), transparent);
+    animation: scan 6s linear infinite; pointer-events:none; z-index:1;
+  }
+  .wrap { position: relative; z-index: 2; max-width: 1280px; margin: 0 auto; padding: 24px; }
+
+  header {
+    display: flex; justify-content: space-between; align-items: flex-end;
+    border-bottom: 1px solid rgba(255,200,0,0.15);
+    padding-bottom: 14px; margin-bottom: 22px;
+  }
+  h1 {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 36px; color: var(--gold); letter-spacing: 6px; line-height: 1;
+  }
+  .meta { text-align: right; font-size: 11px; color: var(--text-dim); letter-spacing: 2px; }
+  .pulse { color: var(--green); }
+  .pulse.stale { color: var(--orange); }
+  .pulse.dead { color: var(--red); }
+  .badge {
+    display: inline-block; padding: 2px 8px; font-size: 10px; letter-spacing: 2px;
+    border: 1px solid; border-radius: 2px; text-transform: uppercase;
+  }
+  .badge.paper { border-color: var(--blue); color: var(--blue); }
+  .badge.live  { border-color: var(--red);  color: var(--red); }
+  .badge.estop { border-color: var(--red);  color: var(--red); animation: blink 1s infinite; }
+  @keyframes blink { 50% { opacity: 0.3; } }
+
+  .stats {
+    display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px;
+    margin-bottom: 22px;
+  }
+  .stat {
+    padding: 14px 10px; border: 1px solid rgba(255,200,0,0.15);
+    background: var(--gold-faint); border-radius: 2px;
+  }
+  .stat-label { font-size: 9px; color: var(--text-dim); letter-spacing: 2px; text-transform: uppercase; }
+  .stat-val   { font-family: 'Bebas Neue', sans-serif; font-size: 28px; color: var(--gold); letter-spacing: 2px; line-height: 1.1; margin-top: 4px; }
+  .stat-val.green { color: var(--green); }
+  .stat-val.red   { color: var(--red); }
+  .stat-sub   { font-size: 10px; color: var(--text-dim); margin-top: 4px; }
+
+  .grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+  }
+  @media (max-width: 880px) {
+    .stats { grid-template-columns: repeat(3, 1fr); }
+    .grid  { grid-template-columns: 1fr; }
+  }
+  .panel {
+    border: 1px solid rgba(255,200,0,0.12);
+    background: var(--panel); border-radius: 2px; padding: 14px;
+    margin-bottom: 16px;
+  }
+  .panel h2 {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 16px; color: var(--gold); letter-spacing: 3px;
+    padding-bottom: 8px; margin-bottom: 10px;
+    border-bottom: 1px solid rgba(255,200,0,0.12);
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  th {
+    text-align: left; color: var(--text-dim); font-weight: 400;
+    letter-spacing: 1px; text-transform: uppercase;
+    padding: 6px 6px; border-bottom: 1px solid rgba(255,200,0,0.08);
+  }
+  td {
+    padding: 6px 6px; border-bottom: 1px solid rgba(255,255,255,0.03);
+    font-size: 11px;
+  }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td.green { color: var(--green); }
+  td.red   { color: var(--red); }
+  td.mint  { color: var(--text-dim); font-size: 10px; }
+  td.sym   { color: var(--gold); font-weight: 500; }
+  tr.empty td { text-align: center; color: var(--text-dim); padding: 14px; font-style: italic; }
+
+  .controls { display: flex; gap: 10px; flex-wrap: wrap; }
+  button {
+    background: transparent; color: var(--gold);
+    border: 1px solid var(--gold-dim);
+    padding: 8px 14px; font-family: 'DM Mono', monospace;
+    font-size: 11px; letter-spacing: 2px; cursor: pointer;
+    text-transform: uppercase; transition: all 0.15s;
+  }
+  button:hover { background: var(--gold-dim); }
+  button.danger { color: var(--red); border-color: var(--red); }
+  button.danger:hover { background: rgba(255,64,64,0.1); }
+  button.warn   { color: var(--orange); border-color: var(--orange); }
+  button.warn:hover { background: rgba(255,153,51,0.1); }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+
+  .pattern-tag {
+    display: inline-block; padding: 1px 5px; margin-right: 3px;
+    font-size: 9px; letter-spacing: 1px;
+    border: 1px solid; border-radius: 2px; text-transform: uppercase;
+  }
+  .pattern-tag.pos { color: var(--green); border-color: rgba(0,221,119,0.4); }
+  .pattern-tag.neg { color: var(--red);   border-color: rgba(255,64,64,0.4); }
+
+  .login-overlay {
+    position: fixed; inset: 0; background: rgba(7,9,12,0.95);
+    z-index: 100; display: none; align-items: center; justify-content: center;
+  }
+  .login-overlay.show { display: flex; }
+  .login-box {
+    border: 1px solid var(--gold-dim); background: var(--panel);
+    padding: 28px; max-width: 360px; width: 100%;
+  }
+  .login-box h2 { color: var(--gold); font-family: 'Bebas Neue', sans-serif;
+    letter-spacing: 4px; font-size: 22px; margin-bottom: 14px; }
+  .login-box input {
+    display: block; width: 100%; margin-bottom: 10px;
+    background: var(--bg); color: var(--text);
+    border: 1px solid var(--gold-dim); padding: 8px 12px;
+    font-family: 'DM Mono', monospace; font-size: 12px;
+  }
+  .login-box .err { color: var(--red); font-size: 11px; margin-bottom: 10px; min-height: 14px; }
+
+  .footer-note {
+    margin-top: 20px; text-align: center; font-size: 10px; color: var(--text-dim);
+    letter-spacing: 2px;
+  }
+</style>
+</head>
+<body>
+<div class="scanline"></div>
+
+<!-- Auth prompt only used if first request returns 401 (Basic Auth enabled
+     on server). Sets credentials for subsequent fetches. -->
+<div class="login-overlay" id="login">
+  <div class="login-box">
+    <h2>Authenticate</h2>
+    <input id="user" placeholder="username" autocomplete="username">
+    <input id="pass" type="password" placeholder="password" autocomplete="current-password">
+    <div class="err" id="err"></div>
+    <button onclick="doLogin()" style="width:100%">Sign in</button>
+  </div>
+</div>
+
+<div class="wrap">
+  <header>
+    <div>
+      <h1>PUMP BOT</h1>
+      <div style="font-size:10px;color:var(--text-dim);letter-spacing:3px;margin-top:4px;">
+        LIVE DASHBOARD
+      </div>
+    </div>
+    <div class="meta">
+      <div><span id="mode-badge"></span> <span id="estop-badge"></span></div>
+      <div style="margin-top:6px;">UPTIME <span id="uptime">—</span></div>
+      <div>SCORED <span id="scored">—</span> · POLL <span class="pulse" id="pulse">●</span></div>
+    </div>
+  </header>
+
+  <div class="stats">
+    <div class="stat">
+      <div class="stat-label">Balance</div>
+      <div class="stat-val" id="balance">—</div>
+      <div class="stat-sub">SOL</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">MTM PnL</div>
+      <div class="stat-val" id="pnl-pct">—</div>
+      <div class="stat-sub" id="pnl-sol">—</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Open</div>
+      <div class="stat-val" id="open-pos">—</div>
+      <div class="stat-sub" id="exposure">—</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Closed</div>
+      <div class="stat-val" id="closed">—</div>
+      <div class="stat-sub" id="losses">—</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Win Rate</div>
+      <div class="stat-val" id="wr">—</div>
+      <div class="stat-sub" id="wr-detail">—</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">Min Score</div>
+      <div class="stat-val" id="min-score">—</div>
+      <div class="stat-sub" id="min-score-sub">—</div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Controls</h2>
+    <div class="controls">
+      <button class="warn"   onclick="postControl('/api/emergency_resume', 'clear emergency stop')">Resume Trading</button>
+      <button class="danger" onclick="postControl('/api/emergency_stop',   'EMERGENCY STOP — force-sell all positions')">Emergency Stop</button>
+      <button onclick="refresh(true)">Refresh Now</button>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="panel">
+      <h2>Open Positions</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Symbol</th><th>Score</th><th class="num">Invested</th>
+            <th class="num">PnL %</th><th class="num">Age</th><th></th>
+          </tr>
+        </thead>
+        <tbody id="positions"><tr class="empty"><td colspan="6">no open positions</td></tr></tbody>
+      </table>
+    </div>
+
+    <div class="panel">
+      <h2>Recent Trades</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Symbol</th><th class="num">PnL SOL</th>
+            <th class="num">PnL %</th><th>Reason</th>
+          </tr>
+        </thead>
+        <tbody id="trades"><tr class="empty"><td colspan="4">no closed trades yet</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Recent Signals (scored)</h2>
+    <table>
+      <thead>
+        <tr>
+          <th>Symbol</th><th>Mint</th><th class="num">Score</th>
+          <th>Patterns</th><th class="num">Curve</th>
+          <th class="num">Init Buy</th><th>Status</th>
+        </tr>
+      </thead>
+      <tbody id="signals"><tr class="empty"><td colspan="7">no signals yet</td></tr></tbody>
+    </table>
+  </div>
+
+  <div class="footer-note">
+    DATA REFRESHES EVERY 2 SECONDS · SOURCE /api/{status,positions,trades,signals}
+  </div>
+</div>
+
+<script>
+  // ── State ────────────────────────────────────────────────────────────────
+  // Basic Auth header stored only in-memory (not localStorage) to avoid
+  // surfacing creds via XSS in a casual deploy. User re-enters on page load.
+  let authHeader = '';
+  let pollHandle = null;
+  let lastOk = 0;
+
+  function $(id) { return document.getElementById(id); }
+  function fmt(n, digits = 4) {
+    if (n === null || n === undefined || Number.isNaN(n)) return '—';
+    return Number(n).toFixed(digits);
+  }
+  function pct(n, digits = 2) {
+    if (n === null || n === undefined || Number.isNaN(n)) return '—';
+    const s = Number(n).toFixed(digits);
+    return (n >= 0 ? '+' : '') + s + '%';
+  }
+  function shortMint(m) { return m ? m.slice(0, 8) + '…' : '—'; }
+  function fmtUptime(s) {
+    if (!s) return '0m';
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+    return h > 0 ? `${h}h ${m}m` : `${m}m`;
+  }
+
+  async function api(path, opts = {}) {
+    const headers = { 'Accept': 'application/json' };
+    if (authHeader) headers['Authorization'] = authHeader;
+    if (opts.body) headers['Content-Type'] = 'application/json';
+    const resp = await fetch(path, { ...opts, headers });
+    if (resp.status === 401) {
+      $('login').classList.add('show');
+      throw new Error('auth required');
+    }
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    return resp.json();
+  }
+
+  // ── Login ────────────────────────────────────────────────────────────────
+  function doLogin() {
+    const u = $('user').value.trim();
+    const p = $('pass').value;
+    if (!u) { $('err').textContent = 'username required'; return; }
+    authHeader = 'Basic ' + btoa(u + ':' + p);
+    $('err').textContent = '';
+    // Probe — if 401, surface to user; else hide overlay and start polling.
+    fetch('/api/status', { headers: { 'Authorization': authHeader } })
+      .then(r => {
+        if (r.status === 401) { $('err').textContent = 'invalid credentials'; return; }
+        if (!r.ok) { $('err').textContent = `server error ${r.status}`; return; }
+        $('login').classList.remove('show');
+        startPolling();
+      })
+      .catch(e => { $('err').textContent = String(e); });
+  }
+  $('user').addEventListener('keydown', e => { if (e.key === 'Enter') $('pass').focus(); });
+  $('pass').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+
+  // ── Rendering ────────────────────────────────────────────────────────────
+  function renderStatus(s) {
+    $('balance').textContent = fmt(s.balance_sol);
+    const pnlPct = s.mtm_pnl_pct ?? s.total_pnl_pct ?? 0;
+    const pnlSol = s.mtm_pnl_sol ?? s.total_pnl_sol ?? 0;
+    const el = $('pnl-pct');
+    el.textContent = pct(pnlPct);
+    el.className = 'stat-val ' + (pnlPct >= 0 ? 'green' : 'red');
+    $('pnl-sol').textContent = (pnlSol >= 0 ? '+' : '') + fmt(pnlSol) + ' SOL';
+    $('open-pos').textContent = s.open_positions ?? 0;
+    $('exposure').textContent = fmt(s.total_exposure) + ' SOL exposed';
+    $('closed').textContent  = s.closed_trades ?? 0;
+    $('losses').textContent  = (s.consecutive_losses ?? 0) + ' streak';
+    $('wr').textContent      = fmt(s.win_rate, 1) + '%';
+    $('wr-detail').textContent = `start ${fmt(s.starting_sol)} SOL`;
+
+    const at = s.auto_tuner || {};
+    $('min-score').textContent     = at.effective ?? '—';
+    $('min-score-sub').textContent = `base ${at.base_min_score ?? '—'} · offset ${at.offset >= 0 ? '+' : ''}${at.offset ?? 0}`;
+
+    $('uptime').textContent = fmtUptime(s.uptime_seconds);
+    $('scored').textContent = s.scored_count ?? 0;
+
+    $('mode-badge').innerHTML = s.paper_trading
+      ? '<span class="badge paper">paper</span>'
+      : '<span class="badge live">live</span>';
+    $('estop-badge').innerHTML = s.emergency_stop
+      ? '<span class="badge estop">e-stop</span>'
+      : '';
+  }
+
+  function renderPositions(rows) {
+    const tbody = $('positions');
+    if (!rows || rows.length === 0) {
+      tbody.innerHTML = '<tr class="empty"><td colspan="6">no open positions</td></tr>';
+      return;
+    }
+    tbody.innerHTML = rows.map(p => {
+      const pnl = Number(p.pnl_pct || 0);
+      const cls = pnl >= 0 ? 'green' : 'red';
+      return `
+        <tr>
+          <td class="sym">${escape(p.symbol || '???')}</td>
+          <td class="num">${p.score ?? '—'}</td>
+          <td class="num">${fmt(p.sol_invested)}</td>
+          <td class="num ${cls}">${pct(pnl)}</td>
+          <td class="num">${fmt(p.age_minutes, 1)}m</td>
+          <td>
+            <button class="warn" style="padding:2px 8px;font-size:9px;"
+                    onclick="forceSell('${escapeAttr(p.mint)}','${escapeAttr(p.symbol || '?')}')">
+              SELL
+            </button>
+          </td>
+        </tr>`;
+    }).join('');
+  }
+
+  function renderTrades(rows) {
+    const tbody = $('trades');
+    if (!rows || rows.length === 0) {
+      tbody.innerHTML = '<tr class="empty"><td colspan="4">no closed trades yet</td></tr>';
+      return;
+    }
+    tbody.innerHTML = rows.slice(0, 12).map(t => {
+      const pnlSol = Number(t.pnl_sol || 0);
+      const pnlPct = Number(t.pnl_pct || 0);
+      const cls = pnlSol >= 0 ? 'green' : 'red';
+      return `
+        <tr>
+          <td class="sym">${escape(t.symbol || '???')}</td>
+          <td class="num ${cls}">${(pnlSol >= 0 ? '+' : '') + fmt(pnlSol)}</td>
+          <td class="num ${cls}">${pct(pnlPct)}</td>
+          <td>${escape(t.exit_reason || t.reason || '—')}</td>
+        </tr>`;
+    }).join('');
+  }
+
+  // Fusion patterns we know about (matches analyzer/signal_fusion.py catalog).
+  const NEG_PATTERNS = new Set(['tape_divergence', 'hype_no_followthrough']);
+
+  function renderSignals(rows) {
+    const tbody = $('signals');
+    if (!rows || rows.length === 0) {
+      tbody.innerHTML = '<tr class="empty"><td colspan="7">no signals yet</td></tr>';
+      return;
+    }
+    tbody.innerHTML = rows.slice(0, 20).map(t => {
+      const fusion = (t.breakdown && t.breakdown.fusion) || 0;
+      // The signals endpoint embeds the four-factor breakdown but not the
+      // per-pattern map; we have the net delta and the queued flag.
+      const patternsHtml = fusion ? `<span class="pattern-tag ${fusion > 0 ? 'pos' : 'neg'}">fusion ${fusion > 0 ? '+' : ''}${fusion}</span>` : '';
+      const status = t.queued
+        ? '<span class="pattern-tag pos">BUY</span>'
+        : (t.reject_reason
+            ? `<span class="pattern-tag neg" title="${escapeAttr(t.reject_reason)}">REJECT</span>`
+            : '');
+      return `
+        <tr>
+          <td class="sym">${escape(t.symbol || '???')}</td>
+          <td class="mint">${shortMint(t.mint)}</td>
+          <td class="num">${t.score ?? '—'}</td>
+          <td>${patternsHtml || '—'}</td>
+          <td class="num">${fmt(t.curve_pct, 1)}%</td>
+          <td class="num">${fmt(t.initial_buy, 2)}S</td>
+          <td>${status}</td>
+        </tr>`;
+    }).join('');
+  }
+
+  // ── Controls ─────────────────────────────────────────────────────────────
+  async function postControl(path, label) {
+    if (!confirm(`Confirm: ${label}?`)) return;
+    try {
+      const data = await api(path, {
+        method: 'POST',
+        body: JSON.stringify({ confirm: true }),
+      });
+      if (!data.ok) alert('Failed: ' + (data.error || 'unknown'));
+      refresh(true);
+    } catch (e) {
+      alert(String(e));
+    }
+  }
+
+  async function forceSell(mint, symbol) {
+    if (!confirm(`Force-sell ${symbol}?`)) return;
+    try {
+      const data = await api('/api/force_sell', {
+        method: 'POST',
+        body: JSON.stringify({ mint, confirm: true }),
+      });
+      if (!data.ok) alert('Failed: ' + (data.error || 'unknown'));
+      refresh(true);
+    } catch (e) {
+      alert(String(e));
+    }
+  }
+
+  // ── Polling ──────────────────────────────────────────────────────────────
+  async function refresh(force = false) {
+    try {
+      const [status, positions, trades, signals] = await Promise.all([
+        api('/api/status'),
+        api('/api/positions'),
+        api('/api/trades'),
+        api('/api/signals'),
+      ]);
+      renderStatus(status);
+      renderPositions(positions);
+      renderTrades(trades);
+      renderSignals(signals);
+      lastOk = Date.now();
+      $('pulse').className = 'pulse';
+    } catch (e) {
+      // Mark pulse stale; auth overlay handled inside api().
+      const ageMs = Date.now() - lastOk;
+      $('pulse').className = 'pulse ' + (ageMs > 30000 ? 'dead' : 'stale');
+    }
+  }
+
+  function startPolling() {
+    refresh(true);
+    if (pollHandle) clearInterval(pollHandle);
+    pollHandle = setInterval(refresh, 2000);
+  }
+
+  // ── Escape helpers — never inject raw API strings into HTML ──────────────
+  function escape(s) {
+    return String(s ?? '')
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+  function escapeAttr(s) {
+    return escape(s).replace(/`/g, '&#96;');
+  }
+
+  // ── Boot ─────────────────────────────────────────────────────────────────
+  // Probe with no auth first. If 200, no auth required → start polling.
+  // If 401, surface login overlay (Basic Auth is enabled on server).
+  fetch('/api/status')
+    .then(r => {
+      if (r.status === 401) { $('login').classList.add('show'); $('user').focus(); }
+      else if (r.ok)        { startPolling(); }
+      else                  { $('err').textContent = `server error ${r.status}`; $('login').classList.add('show'); }
+    })
+    .catch(() => { $('login').classList.add('show'); $('user').focus(); });
+</script>
+</body>
+</html>

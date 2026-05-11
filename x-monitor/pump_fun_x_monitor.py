@@ -35,8 +35,7 @@ import argparse
 import json
 import os
 import time
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import datetime
 
 import requests
 import tweepy
