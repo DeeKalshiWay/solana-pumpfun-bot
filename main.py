@@ -16,6 +16,7 @@ from loguru import logger
 
 from analyzer.auto_tuner import auto_tuner
 from analyzer.counterfactual import counterfactual
+from analyzer.regime_filter import regime_filter
 from analyzer.signal_scorer import SignalScorer
 from config import (
     CREATOR_BLACKLIST,
@@ -142,7 +143,7 @@ async def trade_loop(trade_queue, executor, risk_manager, dashboard, wallet):
             dashboard.record_signal(token)
             continue
 
-        sol_amount = await risk_manager.calculate_position_size(score)
+        sol_amount = await risk_manager.calculate_position_size(score, symbol=symbol)
         if sol_amount <= 0:
             token["reject_reason"] = "no_capacity"
             dashboard.record_signal(token)
@@ -485,6 +486,9 @@ async def main():
     pumpfun_tracker  = PumpFunTracker(monitor=pumpfun_monitor)
     # Wallet intel attaches before monitor.run() so it sees every event.
     wallet_intel.attach(pumpfun_monitor)
+    # Regime filter also subscribes to creates to maintain its sliding window
+    # of new-mint rates. No state to seed — bootstrap-safe.
+    regime_filter.attach(pumpfun_monitor)
     # Auto-tuner needs the live risk_manager to read closed_trades.
     auto_tuner.attach(risk_mgr)
     trending_scanner = TrendingScanner(raw_queue)

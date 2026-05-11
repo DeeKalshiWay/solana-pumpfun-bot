@@ -19,6 +19,7 @@ from loguru import logger
 
 from analyzer.auto_tuner import auto_tuner
 from analyzer.counterfactual import counterfactual
+from analyzer.regime_filter import regime_filter
 from analyzer.rug_memory import rug_memory
 from config import (
     ATH_RATIO_REJECT_BELOW,
@@ -271,6 +272,13 @@ class SignalScorer:
                 token["reject_reason"] = f"dead_hours_{hour_utc:02d}utc"
                 return False
 
+        # Regime filter — data-driven version of the dead-hours window. Pauses
+        # buys when the trailing 60-min new-mint rate has collapsed relative to
+        # the 24h median. Bootstrap-safe: no-op until enough history accrues.
+        if regime_filter.should_pause():
+            token["reject_reason"] = "regime_dead"
+            return False
+
         # Symbol/name blacklist — pattern-rugs
         symbol = (token.get("symbol", "") or "").strip().upper()
         name   = (token.get("name", "") or "").strip().lower()
@@ -360,10 +368,15 @@ class SignalScorer:
             token["reject_reason"] = f"whale_init_{initial_buy:.1f}S"
             return False
 
-        # Symbol/name sanity check
-        if not token.get("symbol") or token.get("symbol") == "???":
-            token["reject_reason"] = "no_symbol"
-            return False
+        # Symbol/name sanity check — DISABLED 2026-05-10 per
+        # analytics/holdout_validation.md: no_symbol rejections had a 0.0%
+        # rug rate on held-out data (vs 36.3% base). The filter was rejecting
+        # mints that were actually fine and contributing nothing to risk
+        # avoidance. Kept the code as a no-op comment for future audit
+        # trail; remove on next cleanup if no longer informative.
+        # if not token.get("symbol") or token.get("symbol") == "???":
+        #     token["reject_reason"] = "no_symbol"
+        #     return False
 
         # Already dumping hard
         price_change_5m = token.get("price_change_5m", 0)

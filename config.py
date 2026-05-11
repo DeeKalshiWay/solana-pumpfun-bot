@@ -175,7 +175,12 @@ BUY_COOLDOWN_SECONDS  = _env_int("BUY_COOLDOWN_SECONDS",  15)
 # < 0.30 SOL produced the bulk of the +100% pumps and 100% of the
 # moonshots in the rejected sample. Big initial buy = creator bag dump risk.
 # Hard filter at this threshold; the scoring also inverts to reward small.
-MAX_INITIAL_BUY_SOL   = _env_float("MAX_INITIAL_BUY_SOL",  1.5)
+MAX_INITIAL_BUY_SOL   = _env_float("MAX_INITIAL_BUY_SOL",  3.5)
+# Bumped 1.5 -> 3.5 on 2026-05-10 from analytics/holdout_validation.md:
+# only big_init_buy buckets at 3.95/4.0/4.94 SOL validated on held-out
+# data (80%+ rug rate). Buckets at 2-3 SOL had 2-10% rug rate (LOWER than
+# the 36% base) -- the filter was killing winners. 3.5 is the floor that
+# preserves all validated buckets while dropping the killing-winners zone.
 
 # ─── CREATOR TRACKING (Dexter strategy) ───────────────────────────────────────
 CREATOR_TRACKING_ENABLED = _env_bool("CREATOR_TRACKING_ENABLED", True)
@@ -221,6 +226,30 @@ TRAILING_STOP_MOONSHOT_TRIGGER = _env_float("TRAILING_STOP_MOONSHOT_TRIGGER", 10
 STOP_LOSS_PCT               = _env_float("STOP_LOSS_PCT",               15.0)
 EMERGENCY_STOP_DRAWDOWN_PCT = _env_float("EMERGENCY_STOP_DRAWDOWN_PCT", 25.0)
 TIME_EXIT_MINUTES           = _env_int("TIME_EXIT_MINUTES",              5)
+
+# Panic stop-loss: hard floor regardless of primary stop-loss state. If a
+# position rots to -25% (concentration audit floor) we fire a force-sell on
+# every monitor tick + log loudly. Belt-and-suspenders for cases where the
+# regular STOP_LOSS_PCT trigger fired but the tx failed and the position
+# kept decaying. Defaults to a wider band than STOP_LOSS_PCT so it activates
+# only on genuinely-stuck positions.
+PANIC_STOP_LOSS_PCT         = _env_float("PANIC_STOP_LOSS_PCT",         25.0)
+
+# Per-symbol lifetime cap (Plan from 2026-05-10 concentration audit:
+# top 1 ticker = 102.3% of PnL). Refuse to deploy more than this fraction
+# of starting capital into any one symbol over the bot's lifetime. Forces
+# the strategy to find edge ACROSS tickers, not within one lucky one.
+# Tracked separately per symbol (not per mint — fresh redeploys of the
+# same name still count). Set to 999 to disable.
+MAX_SYMBOL_LIFETIME_DEPLOY_PCT = _env_float("MAX_SYMBOL_LIFETIME_DEPLOY_PCT", 10.0)
+
+# Regime filter (Plan from 2026-05-10). Pause new buys when the trailing
+# 60-min new-mint rate drops below this fraction of the 24h hourly median.
+# Bootstrap-safe: filter is inactive until we've observed REGIME_MIN_HOURS
+# of data. Set REGIME_FILTER_ENABLED=false to disable.
+REGIME_FILTER_ENABLED       = _env_bool("REGIME_FILTER_ENABLED",        True)
+REGIME_PAUSE_RATIO          = _env_float("REGIME_PAUSE_RATIO",           0.5)
+REGIME_MIN_HOURS            = _env_int("REGIME_MIN_HOURS",                6)
 
 # Early-rug detector: if a fresh position drops past EARLY_RUG_PCT within
 # EARLY_RUG_WINDOW_SEC, exit immediately — don't wait for the regular stop-loss

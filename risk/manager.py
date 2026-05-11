@@ -37,6 +37,7 @@ from config import (
     MAX_OPEN_POSITIONS,
     MAX_POSITION_PCT,
     MAX_SOL_PER_TRADE,
+    MAX_SYMBOL_LIFETIME_DEPLOY_PCT,
     MAX_TOTAL_EXPOSURE_SOL,
     MOMENTUM_STALL_ENABLED,
     MOMENTUM_STALL_MIN_PROFIT,
@@ -44,6 +45,7 @@ from config import (
     MOMENTUM_STALL_WINDOW_SEC,
     NO_MOVEMENT_BAND_PCT,
     NO_MOVEMENT_EXIT_SECONDS,
+    PANIC_STOP_LOSS_PCT,
     STOP_LOSS_PCT,
     TAKE_PROFIT_LEVELS,
     TIME_EXIT_MINUTES,
@@ -60,6 +62,7 @@ from logger.trade_db import get_trade_db
 
 CLOSED_TRADES_FILE = "logs/closed_trades.jsonl"
 RISK_STATE_FILE    = "logs/risk_state.json"
+SYMBOL_DEPLOYED_FILE = "logs/symbol_deployed.json"
 
 
 @dataclass
@@ -126,6 +129,15 @@ class RiskManager:
         self.day_baseline_date      = None
         self.day_paused             = False
         self.pause_reason           = ""
+
+        # ── Per-symbol lifetime deploy tracker (concentration audit fix) ─────
+        # Sum of SOL ever deployed into each symbol, capped at
+        # MAX_SYMBOL_LIFETIME_DEPLOY_PCT * starting_sol_balance. Persisted to
+        # logs/symbol_deployed.json so it survives restarts; without that the
+        # cap would reset every time the bot is restarted and the
+        # robustness check would be useless.
+        self._symbol_deployed: dict[str, float] = {}
+        self._load_symbol_deployed()
 
     async def initialize(self):
         os.makedirs("logs", exist_ok=True)
@@ -195,6 +207,44 @@ class RiskManager:
         except Exception as e:
             logger.warning(f"[RISK] sqlite trade insert failed: {e}")
 
+    def _load_symbol_deployed(self):
+        """Restore per-symbol deploy totals so the lifetime cap survives
+        restarts. Without this every restart would zero the counter and the
+        robustness guard wouldn't actually constrain anything."""
+        try:
+            if os.path.exists(SYMBOL_DEPLOYED_FILE):
+                with open(SYMBOL_DEPLOYED_FILE, encoding="utf-8") as f:
+                    self._symbol_deployed = {k: float(v) for k, v in json.load(f).items()}
+        except Exception as e:
+            logger.warning(f"[RISK] Could not load symbol_deployed: {e}")
+            self._symbol_deployed = {}
+
+    def _save_symbol_deployed(self):
+        try:
+            tmp = SYMBOL_DEPLOYED_FILE + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(self._symbol_deployed, f)
+            os.replace(tmp, SYMBOL_DEPLOYED_FILE)
+        except Exception as e:
+            logger.debug(f"[RISK] symbol_deployed save err: {e}")
+
+    def _symbol_cap_sol(self) -> float:
+        """Hard cap = MAX_SYMBOL_LIFETIME_DEPLOY_PCT% of original starting capital.
+        Kept off current balance on purpose — a strategy that grows the
+        bankroll shouldn't be allowed to grow its single-ticker exposure
+        proportionally; the audit specifically caught that concentration is
+        the killer, not absolute deploy size."""
+        return self.starting_sol_balance * (MAX_SYMBOL_LIFETIME_DEPLOY_PCT / 100.0)
+
+    def _would_breach_symbol_cap(self, symbol: str, sol_amount: float) -> bool:
+        if MAX_SYMBOL_LIFETIME_DEPLOY_PCT >= 999:
+            return False
+        cap = self._symbol_cap_sol()
+        if cap <= 0:
+            return False
+        already = self._symbol_deployed.get(symbol, 0.0)
+        return (already + sol_amount) > cap
+
     def _load_or_seed_starting_balance(self, current_balance: float) -> float:
         """
         First time we run, persist the current balance as the original
@@ -261,7 +311,7 @@ class RiskManager:
         return False
 
     # ── Position sizing ───────────────────────────────────────────────────────
-    async def calculate_position_size(self, score: int) -> float:
+    async def calculate_position_size(self, score: int, symbol: str | None = None) -> float:
         if self.emergency_stop_active:
             logger.warning("Emergency stop active — no new positions")
             return 0
@@ -272,6 +322,16 @@ class RiskManager:
 
         if len(self.positions) >= MAX_OPEN_POSITIONS:
             logger.warning(f"Max positions reached ({MAX_OPEN_POSITIONS})")
+            return 0
+
+        # Per-symbol lifetime cap (concentration audit fix). Optional symbol
+        # arg keeps backward-compat — callers that don't pass it skip the check.
+        if symbol and self._would_breach_symbol_cap(symbol, 0.0):
+            already = self._symbol_deployed.get(symbol, 0)
+            logger.warning(
+                f"[SYMBOL CAP] {symbol} | lifetime deploy {already:.4f} SOL "
+                f">= cap {self._symbol_cap_sol():.4f} ({MAX_SYMBOL_LIFETIME_DEPLOY_PCT}% of start) — no new buy"
+            )
             return 0
 
         total_exposure = sum(p.sol_invested for p in self.positions.values())
@@ -300,6 +360,13 @@ class RiskManager:
         # Don't exceed remaining capacity
         remaining = MAX_TOTAL_EXPOSURE_SOL - total_exposure
         size      = min(size, remaining)
+
+        # Clip to remaining per-symbol cap (concentration audit fix).
+        if symbol and MAX_SYMBOL_LIFETIME_DEPLOY_PCT < 999:
+            cap = self._symbol_cap_sol()
+            sym_remaining = max(0.0, cap - self._symbol_deployed.get(symbol, 0.0))
+            if sym_remaining < size:
+                size = sym_remaining
 
         # Minimum viable trade — covers fees + slippage with room to profit.
         min_viable = min(MAX_SOL_PER_TRADE / 2, 0.003)
@@ -343,6 +410,14 @@ class RiskManager:
         )
 
         self.positions[mint] = pos
+
+        # Record lifetime deploy under this symbol for the concentration cap.
+        # Symbol-keyed, not mint-keyed: a creator relaunching the same name
+        # after a rug counts as the same bucket.
+        if symbol and sol_spent > 0:
+            self._symbol_deployed[symbol] = self._symbol_deployed.get(symbol, 0.0) + sol_spent
+            self._save_symbol_deployed()
+
         logger.success(
             f"[POSITION OPENED] {symbol} | {sol_spent:.4f} SOL | "
             f"entry={entry_price:.10f} | score={pos.score}"
@@ -529,10 +604,23 @@ class RiskManager:
 
         # ── Hard stop loss ───────────────────────────────────────────────────
         if pnl_pct <= -STOP_LOSS_PCT:
-            logger.warning(
-                f"[STOP LOSS] {pos.symbol} | PnL: {pnl_pct:.1f}% | Selling 100%"
-            )
-            await self._force_sell(mint, "stop_loss")
+            # Panic floor: position has rotted past the wider band even though
+            # the primary stop-loss should have already fired. Likely a stuck
+            # sell tx or rug-pulled liquidity. Log distinctly so it's findable
+            # in the log, and use a different reason string so closed_trades
+            # downstream can distinguish "we missed the stop" from "we hit it".
+            reason = "stop_loss"
+            if pnl_pct <= -PANIC_STOP_LOSS_PCT:
+                reason = "panic_stop_loss"
+                logger.critical(
+                    f"[PANIC STOP] {pos.symbol} | PnL: {pnl_pct:.1f}% past -{PANIC_STOP_LOSS_PCT}% floor — "
+                    f"force-selling 100% (regular stop fired at -{STOP_LOSS_PCT}% but position still open)"
+                )
+            else:
+                logger.warning(
+                    f"[STOP LOSS] {pos.symbol} | PnL: {pnl_pct:.1f}% | Selling 100%"
+                )
+            await self._force_sell(mint, reason)
             return
 
         # ── Adaptive trailing stop ─────────────────────────────────────────────
