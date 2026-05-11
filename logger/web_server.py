@@ -29,6 +29,7 @@ from analyzer.score_bins import aggregate_by_score
 from detector.creator_tracker import creator_tracker
 from detector.influencer_monitor import influencer_monitor
 from detector.wallet_intel import wallet_intel
+from detector.whale_tracker import whale_tracker
 
 
 def _get_lan_ip() -> str:
@@ -217,6 +218,7 @@ class WebDashboard:
             "bundles_flagged":   sum(1 for v in wallet_intel._bundle_decided.values() if v),
             "influencer_hits":   influencer_hits,
             "influencer_handles": influencer_monitor._handles,
+            "whales":            whale_tracker.stats(),
         })
 
     async def api_learn(self, request):

@@ -33,6 +33,7 @@ from detector.pumpfun_monitor import PumpFunMonitor
 from detector.pumpfun_tracker import PumpFunTracker
 from detector.social_monitor import SocialMonitor
 from detector.wallet_intel import wallet_intel
+from detector.whale_tracker import whale_tracker
 from logger.daily_report import DailyReporter
 from logger.dashboard import Dashboard, setup_logging
 from logger.report import ReportLogger
@@ -486,6 +487,9 @@ async def main():
     pumpfun_tracker  = PumpFunTracker(monitor=pumpfun_monitor)
     # Wallet intel attaches before monitor.run() so it sees every event.
     wallet_intel.attach(pumpfun_monitor)
+    # Whale tracker piggybacks on the same shared WS — aggregates SOL
+    # volume per wallet so the scorer sees "real money bought this".
+    whale_tracker.attach(pumpfun_monitor)
     # Regime filter also subscribes to creates to maintain its sliding window
     # of new-mint rates. No state to seed — bootstrap-safe.
     regime_filter.attach(pumpfun_monitor)
