@@ -54,6 +54,7 @@ from config import (
     TRAILING_STOP_PCT,
 )
 from detector.creator_tracker import creator_tracker
+from detector.wallet_intel import wallet_intel
 from logger.telegram_alerts import send_alert
 from logger.trade_db import get_trade_db
 
@@ -382,6 +383,16 @@ class RiskManager:
         # Feed result back into creator tracker for leaderboard
         if pos.creator:
             creator_tracker.record_trade_result(pos.creator, pnl_sol)
+
+        # Smart-money attribution (Plan A 2026-05-10): widen the wallet_intel
+        # outcome pool to include mints we actually traded, not just the
+        # rejected population. pnl_pct on a closed live trade is a strong
+        # outcome signal — better-than-counterfactual since we observed the
+        # full trade lifecycle, not just a 10-min snapshot.
+        try:
+            wallet_intel.attribute_outcome(mint, float(pos.pnl_pct))
+        except Exception as e:
+            logger.debug(f"[risk] wallet_intel.attribute_outcome err: {e}")
 
         # Rug-pattern memory: if this trade rugged, record its fingerprint
         # so future candidates with the same pattern get docked at scoring.

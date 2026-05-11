@@ -295,22 +295,46 @@ class SignalScorer:
             token["reject_reason"] = "creator_blacklisted"
             return False
 
-        # Tier 4: known sniper-bot creator (50+ pump.fun mints bought)
-        if creator and wallet_intel.is_bot_wallet(creator):
-            token["reject_reason"] = f"bot_creator_{wallet_intel.wallet_buys(creator)}"
-            return False
-
-        # Tier 4: bundled launch (2+ non-creator wallets bought in first 4s)
+        # Tier 4: noise-bot creator (Plan A 2026-05-10). Was: reject if creator
+        # had ≥25 buys. Now: reject only if creator is *classified* noise — a
+        # smart wallet at ≥25 buys is the signal we want, not a filter target.
+        # Wallets with ≥25 buys but no outcome record yet (unknown class) keep
+        # the legacy reject so we don't regress on uncharacterized bot pools.
         mint = token.get("mint", "")
-        if mint and wallet_intel.is_bundled_launch(mint):
-            token["reject_reason"] = "bundled_launch"
-            return False
+        if creator and wallet_intel.is_bot_wallet(creator):
+            cclass = wallet_intel.wallet_class(creator)
+            if cclass == "noise" or cclass == "unknown":
+                token["reject_reason"] = (
+                    f"noise_creator_{wallet_intel.wallet_buys(creator)}"
+                    if cclass == "noise"
+                    else f"bot_creator_{wallet_intel.wallet_buys(creator)}"
+                )
+                return False
+            # cclass == "smart": fall through; the smart-money bonus in
+            # _compute_score will see this creator as a positive signal.
 
-        # Tighter sniper-target check: any KNOWN bot wallet was among the first
-        # buyers (fires for single bots — bundle threshold needs 2+).
+        # Tier 4: bundled launch. Was: reject if 5+ early buyers (coordination
+        # signal). Now: only reject if fewer than 2 of those early buyers are
+        # smart wallets — a bundle of smart money is curated, not coordinated.
+        if mint and wallet_intel.is_bundled_launch(mint):
+            n_smart = len(wallet_intel.smart_buyers_in_window(mint))
+            if n_smart < 2:
+                token["reject_reason"] = "bundled_launch"
+                return False
+
+        # Tier 4: known noise wallet was an early buyer. Was: any bot wallet
+        # tripped the reject. Now: only reject if a noise wallet bought AND
+        # no smart wallet bought — a smart wallet in the window outranks the
+        # noise wallet's negative signal.
         if mint and wallet_intel.has_bot_buyer(mint):
-            token["reject_reason"] = "bot_buyer_in_window"
-            return False
+            n_smart = len(wallet_intel.smart_buyers_in_window(mint))
+            n_noise = len(wallet_intel.noise_buyers_in_window(mint))
+            # Unknown bot-class wallets (no outcome record yet) still count as
+            # noise for backward compatibility — they're what legacy is_bot
+            # was matching against.
+            if n_smart == 0 or n_noise > n_smart:
+                token["reject_reason"] = "bot_buyer_in_window"
+                return False
 
         # ATH-ratio reject — token already dumped from peak; we'd be top-buying.
         # Only fires when tracker has data (pf_ath_ratio > 0).
@@ -398,6 +422,23 @@ class SignalScorer:
                 logger.debug(f"[CREATOR BONUS] {symbol} creator={creator[:8]} +{bonus}")
             elif bonus < 0:
                 logger.debug(f"[CREATOR PENALTY] {symbol} creator={creator[:8]} {bonus}")
+
+        # Smart-money bonus (Plan A 2026-05-10). Known-winning wallets buying
+        # in the first 10s are the highest-signal entry we have. Cap at +15
+        # so it can't single-handedly clear the factor-1 ceiling.
+        mint = token.get("mint", "")
+        if mint:
+            smart_count = len(wallet_intel.smart_buyers_in_window(mint))
+            if smart_count >= 2:
+                creator_score += 15
+                logger.debug(f"[SMART-MONEY] {symbol} mint={mint[:8]} +15 ({smart_count} smart buyers)")
+            elif smart_count == 1:
+                creator_score += 8
+                logger.debug(f"[SMART-MONEY] {symbol} mint={mint[:8]} +8 (1 smart buyer)")
+            # Smart creator (passed the noise reject) also bumps the score
+            if creator and wallet_intel.is_smart_wallet(creator):
+                creator_score += 8
+                logger.debug(f"[SMART-MONEY] {symbol} smart creator={creator[:8]} +8")
 
         breakdown["creator"] = max(0, min(creator_score, 25))
 

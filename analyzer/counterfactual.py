@@ -29,6 +29,7 @@ import aiohttp
 from loguru import logger
 
 from analyzer.rug_memory import RUG_PNL_THRESHOLD, rug_memory
+from detector.wallet_intel import wallet_intel
 
 REJECT_QUEUE_FILE = "logs/counterfactual_pending.jsonl"  # not strictly needed but good for restart safety
 OUTCOME_FILE      = "logs/counterfactual.jsonl"
@@ -102,6 +103,17 @@ class CounterfactualLogger:
             try:
                 outcome = await self._build_outcome(entry)
                 self._append(outcome)
+
+                # Smart-money attribution: walk the mint's early-buyer set
+                # (persisted by wallet_intel at finalize_bundle) and credit
+                # each wallet with this mc_delta_pct outcome. Reclassifies on
+                # boundary crossings so a wallet can flip smart/noise mid-run.
+                try:
+                    wallet_intel.attribute_outcome(
+                        outcome["mint"], outcome.get("mc_delta_pct", 0)
+                    )
+                except Exception as e:
+                    logger.debug(f"[CF] wallet_intel.attribute_outcome err: {e}")
 
                 # Passive rug-memory feed: if this rejected token went on to
                 # rug after rejection, record its feature signature into the
