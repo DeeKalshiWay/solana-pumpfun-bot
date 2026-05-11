@@ -13,6 +13,9 @@ API endpoints:
 """
 
 import asyncio
+import base64
+import binascii
+import hmac
 import os
 import socket
 import time
@@ -43,6 +46,29 @@ def _get_lan_ip() -> str:
 WEB_DIR  = os.path.join(os.path.dirname(os.path.dirname(__file__)), "web")
 WEB_HOST = "0.0.0.0"   # listen on all interfaces (LAN-accessible)
 WEB_PORT = 8765
+
+# Optional HTTP Basic Auth. If both env vars are set, every dashboard route
+# (HTML, API, control POSTs) requires the credentials. Recommended whenever
+# WEB_HOST is anything other than 127.0.0.1, since the control endpoints can
+# emergency-stop the bot or force-sell open positions.
+_AUTH_USER = os.environ.get("DASHBOARD_AUTH_USER", "")
+_AUTH_PASS = os.environ.get("DASHBOARD_AUTH_PASS", "")
+_AUTH_ENABLED = bool(_AUTH_USER and _AUTH_PASS)
+
+
+def _check_basic_auth(header_value: str) -> bool:
+    """Constant-time check of a 'Basic <base64>' Authorization header."""
+    if not header_value or not header_value.lower().startswith("basic "):
+        return False
+    try:
+        decoded = base64.b64decode(header_value.split(" ", 1)[1], validate=True).decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError, ValueError):
+        return False
+    user, _, pw = decoded.partition(":")
+    return (
+        hmac.compare_digest(user, _AUTH_USER)
+        and hmac.compare_digest(pw, _AUTH_PASS)
+    )
 
 
 class WebDashboard:
@@ -277,6 +303,19 @@ class WebDashboard:
 
     # ── Server lifecycle ──────────────────────────────────────────────────────
     @web.middleware
+    async def _auth_middleware(self, request, handler):
+        # Pre-flight requests can't carry an Authorization header; let CORS handle them.
+        if not _AUTH_ENABLED or request.method == "OPTIONS":
+            return await handler(request)
+        if not _check_basic_auth(request.headers.get("Authorization", "")):
+            return web.Response(
+                status=401,
+                headers={"WWW-Authenticate": 'Basic realm="pump-bot dashboard", charset="UTF-8"'},
+                text="Unauthorized",
+            )
+        return await handler(request)
+
+    @web.middleware
     async def _cors_middleware(self, request, handler):
         # Allow the GitHub Pages portfolio site to fetch /api/* across origins.
         # Read-only API; no credentials sent.
@@ -286,11 +325,11 @@ class WebDashboard:
             resp = await handler(request)
         resp.headers["Access-Control-Allow-Origin"]  = "*"
         resp.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
-        resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        resp.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
         return resp
 
     async def run(self):
-        app = web.Application(middlewares=[self._cors_middleware])
+        app = web.Application(middlewares=[self._auth_middleware, self._cors_middleware])
         app.router.add_get("/",              self.index)
         app.router.add_get("/api/status",    self.api_status)
         app.router.add_get("/api/positions", self.api_positions)
@@ -312,6 +351,14 @@ class WebDashboard:
         logger.success("Web dashboard running:")
         logger.success(f"  Local:    http://127.0.0.1:{WEB_PORT}/")
         logger.success(f"  LAN/phone: http://{lan_ip}:{WEB_PORT}/")
+        if _AUTH_ENABLED:
+            logger.success(f"  Basic Auth: ENABLED (user='{_AUTH_USER}')")
+        elif WEB_HOST != "127.0.0.1":
+            logger.warning(
+                "Dashboard auth is DISABLED and bound to {host}: anyone on the network can "
+                "trigger emergency-stop / force-sell. Set DASHBOARD_AUTH_USER and "
+                "DASHBOARD_AUTH_PASS to require Basic Auth.", host=WEB_HOST,
+            )
 
         # Keep alive until cancelled
         try:

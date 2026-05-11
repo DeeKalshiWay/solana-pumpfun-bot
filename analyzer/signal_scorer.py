@@ -265,7 +265,7 @@ class SignalScorer:
     def _passes_hard_filters(self, token: dict) -> bool:
         # Diurnal filter — skip dead hours (UTC). Cheapest reject, do first.
         if DEAD_HOURS_UTC is not None:
-            hour_utc = datetime.datetime.utcnow().hour
+            hour_utc = datetime.datetime.now(datetime.UTC).hour
             start, end = DEAD_HOURS_UTC
             in_window = (start <= hour_utc < end) if start < end else (hour_utc >= start or hour_utc < end)
             if in_window:
