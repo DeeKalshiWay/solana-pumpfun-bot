@@ -86,5 +86,4 @@ memory/
 fix.py
 manual_trade.py
 _restart_clean.ps1
-dashboard.html
 *.tmp
