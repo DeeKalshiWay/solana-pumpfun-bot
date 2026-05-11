@@ -35,6 +35,9 @@ Positive:
   VELOCITY_STACK     buys_5m ≥15 + price_5m >5 + holders ≥20 — multi-axis
                      buying surge (volume, price, holder count all agree)
   PRIME_MC_SMART     market cap in 25-60S sweet spot AND ≥1 smart buyer
+  WHALE_CONFIRMED    ≥1 whale buyer (volume-classified, complement to
+                     smart-money) AND corroboration (smart wallet or
+                     dominant buy-side tape)
                      — well-priced AND well-bought
 
 Negative:
@@ -57,6 +60,11 @@ FUSION_PATTERNS_POSITIVE: dict[str, int] = {
     "smart_crowd_sync":      8,
     "velocity_stack":        6,
     "prime_mc_smart":        4,
+    # Whale presence + at least one corroborating signal. Independent of
+    # smart_crowd_sync (which uses the WIN-RATE-classified smart wallets);
+    # whales are classified by VOLUME. Both firing together is meaningful
+    # because the populations are different — overlap is signal.
+    "whale_confirmed":       7,
 }
 
 FUSION_PATTERNS_NEGATIVE: dict[str, int] = {
@@ -81,6 +89,8 @@ def detect_patterns(token: dict) -> list[str]:
 
     # Field extraction — all default-safe.
     smart_buyers_n   = int(_get(token, "smart_buyer_count", 0))
+    whale_buyers_n   = int(_get(token, "whale_buyer_count", 0))
+    whale_buy_volume = float(_get(token, "whale_buy_volume", 0))
     influencer_hit   = bool(_get(token, "influencer_mention", False)) or \
                        bool(_get(token, "x_hype_match", False))
     comment_velocity = float(_get(token, "pf_comment_velocity", 0))
@@ -130,6 +140,16 @@ def detect_patterns(token: dict) -> list[str]:
     # bought. Validates the band heuristic with capital.
     if 25 <= mc_sol <= 60 and smart_buyers_n >= 1:
         fired.append("prime_mc_smart")
+
+    # WHALE_CONFIRMED: a whale (volume-classified) bought AND at least
+    # one corroborating signal — either a smart wallet (win-rate-classified,
+    # different population) ALSO bought, OR the buy-side tape is dominant.
+    # Whale entry alone is too easy to fake (single rich noob buys);
+    # whale + corroboration is the conjunction we trust.
+    if (whale_buyers_n >= 1 or whale_buy_volume >= 2.0) and (
+        smart_buyers_n >= 1 or (total_5m >= 5 and buy_ratio >= 0.65)
+    ):
+        fired.append("whale_confirmed")
 
     # ── Negative alignments ──────────────────────────────────────────
 

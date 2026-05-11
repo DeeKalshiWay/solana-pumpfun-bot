@@ -46,6 +46,7 @@ from detector.influencer_monitor import influencer_monitor
 from detector.pumpfun_tracker import get_pumpfun_state
 from detector.social_monitor import get_social_stats
 from detector.wallet_intel import wallet_intel
+from detector.whale_tracker import whale_tracker
 from detector.x_feed import x_feed
 
 
@@ -155,6 +156,12 @@ class SignalScorer:
             # wallet_intel once per token).
             if mint:
                 token["smart_buyer_count"] = len(wallet_intel.smart_buyers_in_window(mint))
+                # Whale wallets are different from smart wallets — classified
+                # by SOL VOLUME not win-rate. A whale buying early says "real
+                # money decided this is worth a position" which is independent
+                # signal from the smart-money/win-rate classifier.
+                token["whale_buyer_count"]  = len(whale_tracker.whale_buyers_in_window(mint))
+                token["whale_buy_volume"]   = whale_tracker.whale_buy_volume(mint)
 
             score, breakdown = self._compute_score(token)
             # Stash the RAW (pre-rug-penalty, pre-fusion) score so:
@@ -492,6 +499,26 @@ class SignalScorer:
             if creator and wallet_intel.is_smart_wallet(creator):
                 creator_score += 8
                 logger.debug(f"[SMART-MONEY] {symbol} smart creator={creator[:8]} +8")
+
+            # Whale-buyer bonus — separate signal from smart-money. A whale
+            # is a volume classifier ("real money decided this is worth a
+            # position"); a smart wallet is a win-rate classifier. They can
+            # overlap, but the bonuses are independent on purpose: when
+            # both fire we WANT the score to reflect the conjunction.
+            whale_count = int(token.get("whale_buyer_count", 0))
+            whale_vol   = float(token.get("whale_buy_volume", 0))
+            if whale_count >= 2 or whale_vol >= 3.0:
+                creator_score += 10
+                logger.debug(
+                    f"[WHALE] {symbol} mint={mint[:8]} +10 "
+                    f"({whale_count} whale buyers, {whale_vol:.2f} SOL)"
+                )
+            elif whale_count == 1:
+                creator_score += 5
+                logger.debug(
+                    f"[WHALE] {symbol} mint={mint[:8]} +5 "
+                    f"(1 whale buyer, {whale_vol:.2f} SOL)"
+                )
 
         breakdown["creator"] = max(0, min(creator_score, 25))
 
