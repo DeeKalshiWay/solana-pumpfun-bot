@@ -248,6 +248,8 @@ class WebDashboard:
         if not body.get("confirm"):
             return web.json_response({"ok": False, "error": "missing confirm"}, status=400)
         self.risk_mgr.emergency_stop_active = True
+        if hasattr(self.risk_mgr, "_save_risk_state"):
+            self.risk_mgr._save_risk_state()
         logger.critical("[DASHBOARD] EMERGENCY STOP triggered via web UI — force-selling all positions")
         return web.json_response({"ok": True, "emergency_stop": True})
 
@@ -286,6 +288,8 @@ class WebDashboard:
         self.risk_mgr.emergency_stop_active = False
         # Also clear force-sell in case auto-drawdown trigger had set it
         self.risk_mgr.emergency_force_sell = False
+        if hasattr(self.risk_mgr, "_save_risk_state"):
+            self.risk_mgr._save_risk_state()
         logger.warning("[DASHBOARD] Emergency stop cleared via web UI — trading resumed")
         return web.json_response({"ok": True, "emergency_stop": False})
 
