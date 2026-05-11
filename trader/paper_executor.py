@@ -43,6 +43,8 @@ from config import (
     EXIT_LATENCY_ENABLED,
     EXIT_LATENCY_P50_S,
     EXIT_LATENCY_P99_S,
+    PRIORITY_FEE_SOL,
+    SELL_PRIORITY_FEE_SOL,
     STAMPEDE_MULT_STALL,
 )
 
@@ -118,8 +120,34 @@ MEV_SIZE_COEFF          = 0.4     # additional, scales with curve fraction
 TX_FAIL_RATE            = 0.05    # 5% — assumes Helius RPC
 
 # Solana network fee per tx (priority fee + signature) in SOL.
-# Dragged from each round-trip whether you win or lose.
+# Legacy flat constant — kept for non-realistic mode + the tx-fail gas burn
+# refund logic. Realistic mode uses the asymmetric live model below.
 NETWORK_FEE_SOL         = 0.0008  # ~$0.12 per round-trip
+
+# ── Live-calibrated priority fees ─────────────────────────────────────────
+# Mirrors trader/pumpportal_executor.py exactly: buys scale at 5% of trade
+# size with a 0.0005 SOL floor and PRIORITY_FEE_SOL cap; sells scale at 5%
+# of position value with a SELL_PRIORITY_FEE_SOL cap (5x the buy cap).
+# Asymmetric fees were the dominant unmodeled friction in paper — small
+# trades that round-tripped fast paid 1x the cap on entry and 5x on exit.
+SMALL_SELL_FEE_FALLBACK = 0.001  # used when position_value <= 0.1 SOL,
+                                  # matches pumpportal_executor.py:58
+
+
+def _buy_priority_fee(sol_amount: float) -> float:
+    """Live-model buy priority fee: scales with trade size, capped + floored."""
+    if not REALISTIC_PAPER_SIM:
+        return NETWORK_FEE_SOL
+    return min(PRIORITY_FEE_SOL, max(sol_amount * 0.05, 0.0005))
+
+
+def _sell_priority_fee(position_value_sol: float) -> float:
+    """Live-model sell priority fee: 5x the buy cap, scales with position value."""
+    if not REALISTIC_PAPER_SIM:
+        return NETWORK_FEE_SOL
+    if position_value_sol > 0.1:
+        return min(SELL_PRIORITY_FEE_SOL, position_value_sol * 0.05)
+    return min(SELL_PRIORITY_FEE_SOL, SMALL_SELL_FEE_FALLBACK)
 
 # Late-TP penalty: by the time +800% TP fires the token is often rolling
 # over and exits get worse fills than entries.
@@ -169,11 +197,11 @@ class PaperExecutor:
     async def start(self):
         if REALISTIC_PAPER_SIM:
             logger.warning(
-                "[PAPER] REALISTIC sim ON: "
+                "[PAPER] REALISTIC sim ON (live-calibrated): "
                 f"base slip {BASE_SLIPPAGE_PCT*100:.1f}%, "
                 f"size coeff {SIZE_SLIPPAGE_COEFF}, "
                 f"tx fail {TX_FAIL_RATE*100:.0f}%, "
-                f"fee {NETWORK_FEE_SOL} SOL/leg"
+                f"buy fee ≤{PRIORITY_FEE_SOL} SOL · sell fee ≤{SELL_PRIORITY_FEE_SOL} SOL"
             )
         else:
             logger.info("[PAPER] Legacy 1.5%-flat slippage sim")
@@ -190,14 +218,16 @@ class PaperExecutor:
         token = token or {}
         symbol = token.get("symbol", token_mint[:8])
 
+        # Priority fee scaled to trade size, matching live pumpportal_executor.
+        buy_fee = _buy_priority_fee(sol_amount)
         # Network fee gets eaten regardless of fill outcome
-        self.wallet.deduct(NETWORK_FEE_SOL)
+        self.wallet.deduct(buy_fee)
 
         # Tx failure: lost gas, no position
         if _will_tx_fail():
             logger.warning(
                 f"[PAPER BUY FAILED] {symbol} | tx failed (RPC drop) | "
-                f"-{NETWORK_FEE_SOL} SOL gas burned"
+                f"-{buy_fee:.4f} SOL gas burned"
             )
             return {
                 "success":         False,
@@ -229,7 +259,7 @@ class PaperExecutor:
         tokens_received = int(sol_amount / effective_price)
 
         if tokens_received <= 0:
-            self.wallet.credit(NETWORK_FEE_SOL)  # refund the gas if no fill
+            self.wallet.credit(buy_fee)          # refund the gas if no fill
             logger.warning(f"[PAPER BUY 0FILL] {symbol} | curve too small")
             return {
                 "success": False, "error": "zero_fill", "venue": "paper",
@@ -243,7 +273,7 @@ class PaperExecutor:
 
         logger.success(
             f"[PAPER BUY] {symbol} | {sol_amount:.4f} SOL -> {tokens_received:,} tokens "
-            f"| slip={slip*100:.1f}% mev={mev*100:.1f}% (curve={curve_sol:.0f} SOL)"
+            f"| slip={slip*100:.1f}% mev={mev*100:.1f}% fee={buy_fee:.4f} (curve={curve_sol:.0f} SOL)"
         )
 
         return {
@@ -269,14 +299,23 @@ class PaperExecutor:
         # prebuilt_tx is ignored in paper mode (no real tx). Param exists so
         # the kwarg from risk_manager._force_sell doesn't crash.
         # price_history is consumed only on stall-class exits (see below).
-        # Network fee on exit too
-        self.wallet.deduct(NETWORK_FEE_SOL)
+
+        # Sell-side priority fee, scaled to the position's notional value.
+        # In live this caps at 5x the buy cap because exit urgency on a rug
+        # pays for itself — paper now models the same asymmetry.
+        price_now_for_fee = self._prices.get(token_mint, 0)
+        if isinstance(token_amount_raw, str) and "%" in token_amount_raw:
+            pos_value = 0.0   # full %-exit; will resolve below, fee uses 0 (small-fallback)
+        else:
+            pos_value = float(token_amount_raw) * price_now_for_fee
+        sell_fee = _sell_priority_fee(pos_value)
+        self.wallet.deduct(sell_fee)
 
         # Tx failure on sell — keeps position, loses gas, retries next tick
         if _will_tx_fail():
             logger.warning(
                 f"[PAPER SELL FAILED] {token_mint[:8]} | reason={reason} | "
-                f"tx failed | -{NETWORK_FEE_SOL} SOL gas burned"
+                f"tx failed | -{sell_fee:.4f} SOL gas burned"
             )
             return {
                 "success":      False,
@@ -358,7 +397,7 @@ class PaperExecutor:
             logger.success(
                 f"[PAPER SELL] {token_mint[:8]} | reason={reason} | "
                 f"{token_amount_raw:,} tokens -> {sol_received:.4f} SOL "
-                f"(slip={slip*100:.1f}% mev={mev*100:.1f}%"
+                f"(slip={slip*100:.1f}% mev={mev*100:.1f}% fee={sell_fee:.4f}"
                 f"{' +late' if late_tp_penalty else ''})"
             )
 

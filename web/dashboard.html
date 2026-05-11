@@ -235,6 +235,22 @@
     </div>
   </div>
 
+  <div class="panel">
+    <h2>Equity Curve <span id="chart-source" style="font-size:9px;color:var(--text-dim);letter-spacing:1px;margin-left:8px;">—</span></h2>
+    <div id="chart-empty" style="display:none;text-align:center;color:var(--text-dim);font-size:11px;padding:30px 0;font-style:italic;">
+      collecting samples…
+    </div>
+    <svg id="equity-chart" viewBox="0 0 800 220" preserveAspectRatio="none"
+         style="width:100%;height:220px;display:block;">
+      <g id="grid"></g>
+      <path id="curve" fill="none" stroke="var(--gold)" stroke-width="1.5"/>
+      <path id="curve-fill" fill="var(--gold-faint)" stroke="none"/>
+      <line id="zero-line" stroke="rgba(221,212,184,0.18)" stroke-dasharray="3,3"/>
+      <g id="markers"></g>
+      <g id="axis-labels"></g>
+    </svg>
+  </div>
+
   <div class="grid">
     <div class="panel">
       <h2>Open Positions</h2>
@@ -417,8 +433,36 @@
     }).join('');
   }
 
-  // Fusion patterns we know about (matches analyzer/signal_fusion.py catalog).
+  // Negative fusion patterns — used to color tags red. Names must match
+  // FUSION_PATTERNS_NEGATIVE in analyzer/signal_fusion.py.
   const NEG_PATTERNS = new Set(['tape_divergence', 'hype_no_followthrough']);
+
+  // Short display names so the tags stay narrow in the table.
+  const PATTERN_SHORT = {
+    social_confirmed:       'social✓',
+    organic_launch:         'organic',
+    smart_crowd_sync:       'smart+crowd',
+    velocity_stack:         'velocity',
+    prime_mc_smart:         'prime-mc',
+    tape_divergence:        'tape-div',
+    hype_no_followthrough:  'no-followthru',
+  };
+
+  function fusionTagsHtml(patterns, netDelta) {
+    // patterns is name -> signed-int contribution (server emits {} when none fired).
+    const entries = Object.entries(patterns || {});
+    if (entries.length === 0) {
+      return netDelta
+        ? `<span class="pattern-tag ${netDelta > 0 ? 'pos' : 'neg'}">fusion ${netDelta > 0 ? '+' : ''}${netDelta}</span>`
+        : '—';
+    }
+    return entries.map(([name, val]) => {
+      const cls   = NEG_PATTERNS.has(name) ? 'neg' : 'pos';
+      const label = PATTERN_SHORT[name] || name;
+      const sign  = val > 0 ? '+' : '';
+      return `<span class="pattern-tag ${cls}" title="${escapeAttr(name)}">${escape(label)} ${sign}${val}</span>`;
+    }).join('');
+  }
 
   function renderSignals(rows) {
     const tbody = $('signals');
@@ -427,10 +471,8 @@
       return;
     }
     tbody.innerHTML = rows.slice(0, 20).map(t => {
-      const fusion = (t.breakdown && t.breakdown.fusion) || 0;
-      // The signals endpoint embeds the four-factor breakdown but not the
-      // per-pattern map; we have the net delta and the queued flag.
-      const patternsHtml = fusion ? `<span class="pattern-tag ${fusion > 0 ? 'pos' : 'neg'}">fusion ${fusion > 0 ? '+' : ''}${fusion}</span>` : '';
+      const netFusion   = (t.breakdown && t.breakdown.fusion) || 0;
+      const patternsHtml = fusionTagsHtml(t.fusion_patterns, netFusion);
       const status = t.queued
         ? '<span class="pattern-tag pos">BUY</span>'
         : (t.reject_reason
@@ -441,12 +483,118 @@
           <td class="sym">${escape(t.symbol || '???')}</td>
           <td class="mint">${shortMint(t.mint)}</td>
           <td class="num">${t.score ?? '—'}</td>
-          <td>${patternsHtml || '—'}</td>
+          <td>${patternsHtml}</td>
           <td class="num">${fmt(t.curve_pct, 1)}%</td>
           <td class="num">${fmt(t.initial_buy, 2)}S</td>
           <td>${status}</td>
         </tr>`;
     }).join('');
+  }
+
+  // ── Equity chart ─────────────────────────────────────────────────────────
+  // Two data sources, merged by timestamp:
+  //   - liveSamples:  client-side rolling buffer of every /api/status poll
+  //                   (gives an instant chart from the moment you open the page)
+  //   - serverSnaps:  hourly persistent snapshots from /api/report
+  //                   (survive page reloads and restarts)
+  // Live samples are capped at LIVE_BUFFER to avoid unbounded memory.
+  const LIVE_BUFFER = 720;   // ≈ 24 min at 2s poll
+  const liveSamples = [];    // {ts, balance, mtm}
+  let serverSnaps = [];
+
+  function pushLiveSample(s) {
+    // Prefer mtm_total_sol (liquid + open-position value) over raw balance
+    // so opening a position doesn't visually look like a loss.
+    const equity = s.mtm_total_sol ?? s.balance_sol ?? 0;
+    liveSamples.push({ ts: Date.now() / 1000, equity });
+    if (liveSamples.length > LIVE_BUFFER) liveSamples.shift();
+  }
+
+  function fetchSnaps() {
+    api('/api/report').then(d => {
+      serverSnaps = (d && Array.isArray(d.snapshots)) ? d.snapshots : [];
+      renderChart();
+    }).catch(() => { /* report endpoint optional — ignore */ });
+  }
+
+  function renderChart() {
+    // Merge sources. Server snapshots take precedence in their timestamp
+    // range; live buffer fills the gap between the last snapshot and now.
+    const snaps = serverSnaps.map(s => ({ ts: s.ts, equity: s.balance_sol }));
+    const lastSnapTs = snaps.length ? snaps[snaps.length - 1].ts : 0;
+    const tail = liveSamples.filter(s => s.ts > lastSnapTs);
+    const series = snaps.concat(tail);
+
+    const svg     = $('equity-chart');
+    const empty   = $('chart-empty');
+    const source  = $('chart-source');
+
+    if (series.length < 2) {
+      empty.style.display = 'block';
+      svg.style.display = 'none';
+      source.textContent = '— need ≥ 2 samples';
+      return;
+    }
+    empty.style.display = 'none';
+    svg.style.display = 'block';
+    source.textContent = `${snaps.length} server snap${snaps.length === 1 ? '' : 's'} + ${tail.length} live`;
+
+    // Layout in the 800×220 viewBox.
+    const W = 800, H = 220, PAD_L = 50, PAD_R = 10, PAD_T = 10, PAD_B = 24;
+    const x0 = series[0].ts, x1 = series[series.length - 1].ts;
+    const xRange = Math.max(1, x1 - x0);
+
+    let yMin = Math.min(...series.map(s => s.equity));
+    let yMax = Math.max(...series.map(s => s.equity));
+    if (yMin === yMax) { yMin -= 0.05; yMax += 0.05; }   // avoid /0 on flat
+    // 5% pad
+    const pad = (yMax - yMin) * 0.08;
+    yMin -= pad; yMax += pad;
+
+    const sx = t => PAD_L + ((t - x0) / xRange) * (W - PAD_L - PAD_R);
+    const sy = v => H - PAD_B - ((v - yMin) / (yMax - yMin)) * (H - PAD_T - PAD_B);
+
+    // Build the path.
+    let d = '', fillD = '';
+    series.forEach((p, i) => {
+      const x = sx(p.ts), y = sy(p.equity);
+      d     += (i === 0 ? 'M' : 'L') + x.toFixed(1) + ' ' + y.toFixed(1) + ' ';
+      fillD += (i === 0 ? 'M' : 'L') + x.toFixed(1) + ' ' + y.toFixed(1) + ' ';
+    });
+    fillD += `L${sx(x1).toFixed(1)} ${(H - PAD_B).toFixed(1)} L${sx(x0).toFixed(1)} ${(H - PAD_B).toFixed(1)} Z`;
+    $('curve').setAttribute('d', d);
+    $('curve-fill').setAttribute('d', fillD);
+
+    // Starting-balance reference line, if we can infer it.
+    const startEquity = serverSnaps.length ? serverSnaps[0].balance_sol : series[0].equity;
+    if (startEquity >= yMin && startEquity <= yMax) {
+      $('zero-line').setAttribute('x1', PAD_L);
+      $('zero-line').setAttribute('x2', W - PAD_R);
+      $('zero-line').setAttribute('y1', sy(startEquity));
+      $('zero-line').setAttribute('y2', sy(startEquity));
+      $('zero-line').style.display = '';
+    } else {
+      $('zero-line').style.display = 'none';
+    }
+
+    // Y-axis labels (3 ticks).
+    const labels = [];
+    for (let i = 0; i <= 2; i++) {
+      const v = yMin + (yMax - yMin) * (i / 2);
+      const y = sy(v);
+      labels.push(`<text x="6" y="${(y + 3).toFixed(1)}" fill="rgba(221,212,184,0.45)" font-size="10" font-family="DM Mono,monospace">${v.toFixed(3)}</text>`);
+      labels.push(`<line x1="${PAD_L}" x2="${W - PAD_R}" y1="${y.toFixed(1)}" y2="${y.toFixed(1)}" stroke="rgba(255,200,0,0.05)" stroke-width="1"/>`);
+    }
+    // X-axis: start + end timestamp.
+    const fmtTime = ts => new Date(ts * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    labels.push(`<text x="${PAD_L}" y="${H - 6}" fill="rgba(221,212,184,0.45)" font-size="10" font-family="DM Mono,monospace">${fmtTime(x0)}</text>`);
+    labels.push(`<text x="${W - PAD_R - 50}" y="${H - 6}" fill="rgba(221,212,184,0.45)" font-size="10" font-family="DM Mono,monospace">${fmtTime(x1)}</text>`);
+    $('axis-labels').innerHTML = labels.join('');
+
+    // Markers on server snapshot timestamps.
+    $('markers').innerHTML = snaps.map(s =>
+      `<circle cx="${sx(s.ts).toFixed(1)}" cy="${sy(s.equity).toFixed(1)}" r="2.5" fill="var(--gold)" />`
+    ).join('');
   }
 
   // ── Controls ─────────────────────────────────────────────────────────────
@@ -491,6 +639,8 @@
       renderPositions(positions);
       renderTrades(trades);
       renderSignals(signals);
+      pushLiveSample(status);
+      renderChart();
       lastOk = Date.now();
       $('pulse').className = 'pulse';
     } catch (e) {
@@ -500,10 +650,15 @@
     }
   }
 
+  let snapPollHandle = null;
   function startPolling() {
     refresh(true);
-    if (pollHandle) clearInterval(pollHandle);
-    pollHandle = setInterval(refresh, 2000);
+    fetchSnaps();
+    if (pollHandle)     clearInterval(pollHandle);
+    if (snapPollHandle) clearInterval(snapPollHandle);
+    pollHandle     = setInterval(refresh,    2000);
+    // Server snapshots come once an hour; polling every 60s is plenty.
+    snapPollHandle = setInterval(fetchSnaps, 60000);
   }
 
   // ── Escape helpers — never inject raw API strings into HTML ──────────────
