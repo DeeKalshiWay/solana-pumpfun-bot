@@ -249,6 +249,60 @@ class PumpPortalExecutor:
             await asyncio.sleep(2)
         return False
 
+    async def _sol_delta_from_sig(self, sig: str | None) -> float:
+        """Parse the wallet's SOL credit from a confirmed sell tx receipt.
+
+        Ported from risk/manager.py — exact same algorithm. Lets sell()
+        return a real `sol_received` value to the caller so TP partials
+        and any non-force-sell exit aren't stuck at sol_received=0.
+
+        On-chain source of truth: postBalances[i] - preBalances[i] for our
+        wallet's account index. Avoids the Helius getBalance indexer lag.
+        Retries up to ~10s because the tx may take a moment to be queryable.
+        """
+        if not sig:
+            return 0.0
+        owner = str(self.pubkey)
+        payload_tmpl = {
+            "jsonrpc": "2.0", "id": 1,
+            "method": "getTransaction",
+            "params": [
+                sig,
+                {
+                    "encoding": "jsonParsed",
+                    "maxSupportedTransactionVersion": 0,
+                    "commitment": "confirmed",
+                },
+            ],
+        }
+        urls = RPC_URLS or [RPC_URL]
+        for _attempt in range(7):
+            await asyncio.sleep(1.5)
+            for url in urls:
+                try:
+                    async with self.session.post(
+                        url, json=payload_tmpl,
+                        timeout=aiohttp.ClientTimeout(total=5),
+                    ) as resp:
+                        data = await resp.json()
+                except Exception as e:
+                    logger.debug(f"[PP SOL-DELTA] {url[:30]} err: {e}")
+                    continue
+                res = data.get("result")
+                if not res:
+                    continue
+                meta = res.get("meta") or {}
+                if meta.get("err"):
+                    return 0.0   # tx failed on chain
+                keys = res.get("transaction", {}).get("message", {}).get("accountKeys", [])
+                pre  = meta.get("preBalances", []) or []
+                post = meta.get("postBalances", []) or []
+                for i, k in enumerate(keys):
+                    addr = k.get("pubkey") if isinstance(k, dict) else k
+                    if addr == owner and i < len(pre) and i < len(post):
+                        return max(0.0, (post[i] - pre[i]) / 1e9)
+        return 0.0
+
     # ── Buy ───────────────────────────────────────────────────────────────────
     async def buy(self, token_mint: str, sol_amount: float) -> dict:
         logger.info(f"[PP BUY] {token_mint[:8]}... | {sol_amount} SOL")
@@ -340,18 +394,34 @@ class PumpPortalExecutor:
 
         confirmed = await self._confirm(sig)
 
+        # Resolve actual SOL credited by reading postBalances on the tx
+        # receipt. Without this every sell returned sol_received=0, which
+        # made TP partials look like 100% losses to anything downstream
+        # (auto_tuner, rug_memory, dashboard PnL). risk_manager had a
+        # fallback for force_sell only; populating here means every caller
+        # gets the truth from one place.
+        sol_received = 0.0
+        if confirmed:
+            try:
+                sol_received = await self._sol_delta_from_sig(sig)
+            except Exception as e:
+                logger.debug(f"[PP SELL] sol-delta resolve err: {e}")
+
         result = {
             "success":       confirmed,
             "signature":     sig,
             "type":          "sell",
             "mint":          token_mint,
             "reason":        reason,
-            "sol_received":  0,  # estimate unknown pre-confirm
+            "sol_received":  sol_received,
             "venue":         "pumpportal",
             "timestamp":     time.time(),
         }
         if confirmed:
-            logger.success(f"[PP SELL CONFIRMED] {token_mint[:8]} | reason={reason} | sig: {sig[:20]}")
+            logger.success(
+                f"[PP SELL CONFIRMED] {token_mint[:8]} | reason={reason} | "
+                f"sol_received={sol_received:.4f} | sig: {sig[:20]}"
+            )
         else:
             result["error"] = "unconfirmed"
         return result
