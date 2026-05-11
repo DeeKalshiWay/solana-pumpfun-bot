@@ -168,6 +168,7 @@ class WebDashboard:
                 "symbol":         token.get("symbol", "???"),
                 "mint":           token.get("mint", ""),
                 "score":          token.get("score", 0),
+                "raw_score":      token.get("raw_score", token.get("score", 0)),
                 "market_cap_sol": token.get("market_cap_sol", 0),
                 "initial_buy":    token.get("initial_buy_sol", 0),
                 "curve_pct":      token.get("bonding_curve_pct", 0),
@@ -175,6 +176,9 @@ class WebDashboard:
                 "reject_reason":  token.get("reject_reason", ""),
                 "scored_at":      token.get("scored_at", 0),
                 "breakdown":      token.get("score_breakdown", {}),
+                # Per-pattern fusion contributions (name -> signed int).
+                # Empty when no fusion pattern fired or fusion disabled.
+                "fusion_patterns": token.get("fusion_patterns", {}),
             })
         return web.json_response(out)
 
