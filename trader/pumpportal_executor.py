@@ -144,7 +144,12 @@ class PumpPortalExecutor:
         if len(urls) == 1:
             sig = await _send_one(urls[0])
             if not sig:
-                logger.warning("RPC rejected (PP): single-RPC send failed")
+                # Single-lane fail: the DEBUG log inside _send_one already
+                # captured the error detail. Bring the URL up to WARNING so
+                # production logs are actionable without re-enabling DEBUG.
+                logger.warning(
+                    f"RPC rejected (PP): single-lane send failed via {urls[0][:60]}"
+                )
             return sig
 
         # Race: first non-None signature wins, others are still in-flight
@@ -301,7 +306,12 @@ class PumpPortalExecutor:
         token_amount_or_pct,
         reason: str = "exit",
         prebuilt_tx: bytes | None = None,
+        price_history: list | None = None,
     ) -> dict:
+        # price_history is consumed by the paper executor for latency-honest
+        # exit pricing; live mode pays real latency on the wire so the kwarg
+        # is accepted but ignored here.
+        _ = price_history
         """
         token_amount_or_pct: either a raw token count (int) or a percentage string like "100%"
 

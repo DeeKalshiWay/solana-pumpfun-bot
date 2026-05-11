@@ -275,6 +275,17 @@ MOMENTUM_STALL_PCT_BAND   = _env_float("MOMENTUM_STALL_PCT_BAND",     5.0)
 MOMENTUM_STALL_WINDOW_SEC = _env_int("MOMENTUM_STALL_WINDOW_SEC",    60)
 MOMENTUM_STALL_MIN_PROFIT = _env_float("MOMENTUM_STALL_MIN_PROFIT",   5.0)
 
+# Latency-honest exit pricing (paper sim only).
+# When a force-sell fires, the paper executor will look up the position's
+# price `EXIT_LATENCY` seconds ago instead of the latest tick — modeling
+# the time between detect and on-chain confirmation. STAMPEDE_MULT scales
+# the size slippage on stall-class exits to model adverse selection: every
+# bot watching the same WS feed exits at the same moment.
+EXIT_LATENCY_ENABLED      = _env_bool("EXIT_LATENCY_ENABLED",        True)
+EXIT_LATENCY_P50_S        = _env_float("EXIT_LATENCY_P50_S",          0.8)
+EXIT_LATENCY_P99_S        = _env_float("EXIT_LATENCY_P99_S",          3.0)
+STAMPEDE_MULT_STALL       = _env_float("STAMPEDE_MULT_STALL",         5.0)
+
 # Holder concentration filter (rug indicator). Calls getTokenLargestAccounts.
 # Skip a token if top 10 holders own more than this % of supply.
 # Set 0 to disable.

@@ -32,11 +32,67 @@ That's the point — bring the paper number closer to what a live run would
 actually produce.
 """
 
+import math
 import os
 import random
 import time
 
 from loguru import logger
+
+from config import (
+    EXIT_LATENCY_ENABLED,
+    EXIT_LATENCY_P50_S,
+    EXIT_LATENCY_P99_S,
+    STAMPEDE_MULT_STALL,
+)
+
+# Force-sell reasons that suffer from herd-exit stampede on Solana. When every
+# other bot watching the same WS feed fires the same exit at the same moment,
+# the realized fill happens at a stale price *and* with magnified size impact.
+# Keep this list in sync with the reasons risk/manager._force_sell emits.
+STAMPEDE_REASONS = frozenset({"momentum_stall", "no_movement", "time_exit"})
+
+
+def _sample_exit_latency_s() -> float:
+    """
+    Lognormal latency sample with the configured p50/p99. Derived params:
+      mu    = ln(p50)
+      sigma = (ln(p99) - mu) / 2.326    # 2.326 = one-sided 99th-pct z-score
+    Clamped to [0.05, 30] to avoid pathological extremes.
+    """
+    if not EXIT_LATENCY_ENABLED:
+        return 0.0
+    p50 = max(EXIT_LATENCY_P50_S, 0.05)
+    p99 = max(EXIT_LATENCY_P99_S, p50 * 1.01)
+    mu = math.log(p50)
+    sigma = max((math.log(p99) - mu) / 2.326, 1e-4)
+    return max(0.05, min(random.lognormvariate(mu, sigma), 30.0))
+
+
+def _price_at_lookback(price_history, lookback_s: float, fallback: float) -> float:
+    """
+    Walk back through (ts, pnl_pct, price) tuples and return the price recorded
+    closest to (now - lookback_s). If history is empty or pre-widening (only
+    2 elements per tuple), return fallback. Robust to missing/old entries.
+    """
+    if not price_history:
+        return fallback
+    target_ts = time.time() - lookback_s
+    best_price = None
+    best_dt = float("inf")
+    for entry in price_history:
+        if len(entry) < 3:
+            continue   # pre-widening tuple, no price stored
+        ts, _pnl, price = entry[0], entry[1], entry[2]
+        if price is None or price <= 0:
+            continue
+        dt = abs(ts - target_ts)
+        if dt < best_dt:
+            best_dt = dt
+            best_price = price
+    if best_price is None or best_price <= 0:
+        return fallback
+    return best_price
 
 # ────────────────────────────────────────────────────────────────────────────
 # Tunable realism knobs. Defaults reflect public RPC + small wallet against
@@ -208,9 +264,11 @@ class PaperExecutor:
 
     # ── SELL ──────────────────────────────────────────────────────────────────
     async def sell(self, token_mint: str, token_amount_raw, reason: str = "exit",
-                   prebuilt_tx: bytes | None = None) -> dict:
+                   prebuilt_tx: bytes | None = None,
+                   price_history: list | None = None) -> dict:
         # prebuilt_tx is ignored in paper mode (no real tx). Param exists so
         # the kwarg from risk_manager._force_sell doesn't crash.
+        # price_history is consumed only on stall-class exits (see below).
         # Network fee on exit too
         self.wallet.deduct(NETWORK_FEE_SOL)
 
@@ -230,13 +288,13 @@ class PaperExecutor:
                 "timestamp":    time.time(),
             }
 
-        price     = self._prices.get(token_mint, 0)
+        price_now = self._prices.get(token_mint, 0)
         curve_sol = self._curve_sol.get(token_mint, DEFAULT_CURVE_SOL)
 
         if isinstance(token_amount_raw, str) and "%" in token_amount_raw:
             token_amount_raw = 0
 
-        if price <= 0 or not (isinstance(token_amount_raw, int) and token_amount_raw > 0):
+        if price_now <= 0 or not (isinstance(token_amount_raw, int) and token_amount_raw > 0):
             logger.warning(f"[PAPER SELL 0FILL] {token_mint[:8]} | no price/amount")
             return {
                 "success":      True, "venue": "paper", "type": "sell",
@@ -244,36 +302,78 @@ class PaperExecutor:
                 "sol_received": 0.0, "timestamp": time.time(),
             }
 
-        # Estimate the SOL value of what we're selling at the displayed price
-        gross_sol = token_amount_raw * price
+        # ── Latency-honest exit pricing ──────────────────────────────────────
+        # On stall-class force-sells, our paper fill no longer happens at the
+        # latest tick. By the time the tx confirms (200ms-3s), every other bot
+        # watching the same WS has also fired this exit; the price decays.
+        # Sample a price from `latency_s` ago, clamped to ≤ price_now: a stall
+        # often fires at a local peak, and using a strictly-higher past price
+        # would make the patch *help* the realized side, which is wrong-signed.
+        # The lookback can only WORSEN the fill vs the optimistic baseline.
+        # Outside the stampede reasons (TP ladder, trailing stop), the latest
+        # tick is a fine approximation — those exits aren't herd-correlated.
+        is_stampede = reason in STAMPEDE_REASONS and EXIT_LATENCY_ENABLED
+        latency_s = _sample_exit_latency_s() if is_stampede else 0.0
+        if is_stampede:
+            hist_price = _price_at_lookback(price_history, latency_s, fallback=price_now)
+            exec_price = min(hist_price, price_now)
+            stampede_mult = STAMPEDE_MULT_STALL
+        else:
+            exec_price = price_now
+            stampede_mult = 1.0
 
-        # Apply size-dependent slippage on the way out too
-        slip = _slippage_for_buy(gross_sol, curve_sol)
-        mev  = _mev_tax(gross_sol, curve_sol)
+        gross_sol            = token_amount_raw * exec_price
+        gross_sol_optimistic = token_amount_raw * price_now
+
+        # Apply size-dependent slippage on the way out too. Clamp total drag
+        # to <=0.95 — without this, very large exits (or stampede-multiplied
+        # exits on tight curves) yield NEGATIVE sol_received, which is a math
+        # underflow rather than a realistic outcome. A real fill would just be
+        # very bad, not literally pay-to-sell.
+        slip_base = _slippage_for_buy(gross_sol, curve_sol)
+        slip      = slip_base * stampede_mult
+        mev       = _mev_tax(gross_sol, curve_sol)
         late_tp_penalty = LATE_TP_EXIT_PENALTY if "800" in reason else 0.0
-        total_drag = slip + mev + late_tp_penalty
+        total_drag = min(slip + mev + late_tp_penalty, 0.95)
 
         # On exits, slippage REDUCES sol received (vs increasing cost on entries)
         sol_received = gross_sol * (1 - total_drag)
         self.wallet.credit(sol_received)
 
-        logger.success(
-            f"[PAPER SELL] {token_mint[:8]} | reason={reason} | "
-            f"{token_amount_raw:,} tokens -> {sol_received:.4f} SOL "
-            f"(slip={slip*100:.1f}% mev={mev*100:.1f}%"
-            f"{' +late' if late_tp_penalty else ''})"
-        )
+        # Counterfactual: what we'd have credited under the OLD model
+        # (latest tick price, no stampede multiplier). Same MEV / late-TP
+        # penalty so the diff isolates the latency+stampede effect. Same clamp.
+        opt_total_drag      = min(slip_base + mev + late_tp_penalty, 0.95)
+        sol_received_optim  = gross_sol_optimistic * (1 - opt_total_drag)
+
+        if is_stampede:
+            logger.success(
+                f"[PAPER SELL/STAMPEDE] {token_mint[:8]} | reason={reason} | "
+                f"{token_amount_raw:,} tokens -> {sol_received:.4f} SOL "
+                f"(was {sol_received_optim:.4f} pre-latency) | "
+                f"slip {slip_base*100:.1f}%×{stampede_mult:.1f}={slip*100:.1f}% "
+                f"mev={mev*100:.1f}% lat={latency_s:.2f}s"
+            )
+        else:
+            logger.success(
+                f"[PAPER SELL] {token_mint[:8]} | reason={reason} | "
+                f"{token_amount_raw:,} tokens -> {sol_received:.4f} SOL "
+                f"(slip={slip*100:.1f}% mev={mev*100:.1f}%"
+                f"{' +late' if late_tp_penalty else ''})"
+            )
 
         # Cleanup entry tracking
         self._entry_slippage_taken.pop(token_mint, None)
 
         return {
-            "success":      True,
-            "signature":    f"PAPER_SELL_{token_mint[:8]}_{int(time.time())}",
-            "type":         "sell",
-            "mint":         token_mint,
-            "reason":       reason,
-            "sol_received": sol_received,
-            "venue":        "paper",
-            "timestamp":    time.time(),
+            "success":               True,
+            "signature":             f"PAPER_SELL_{token_mint[:8]}_{int(time.time())}",
+            "type":                  "sell",
+            "mint":                  token_mint,
+            "reason":                reason,
+            "sol_received":          sol_received,
+            "sol_received_optimistic": sol_received_optim if is_stampede else None,
+            "exit_latency_s":        latency_s if is_stampede else None,
+            "venue":                 "paper",
+            "timestamp":             time.time(),
         }

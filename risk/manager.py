@@ -368,6 +368,13 @@ class RiskManager:
             "hold_minutes": pos.age_minutes,
             "reason":       sell_result.get("reason", "unknown"),
             "score":        pos.score,           # for score-bin learning loop
+            # Latency-honest accounting (paper sim). On stall-class exits the
+            # executor returns the optimistic counterfactual — what sol_received
+            # would have been if priced at the latest tick with no stampede
+            # multiplier. Diff is the structural friction we'd previously been
+            # ignoring. None on non-stall exits and on live trades.
+            "sol_received_optimistic": sell_result.get("sol_received_optimistic"),
+            "exit_latency_s":          sell_result.get("exit_latency_s"),
         }
         self.closed_trades.append(trade_record)
         self._append_closed_trade(trade_record)   # persist to JSONL
@@ -435,9 +442,12 @@ class RiskManager:
         if current_price_sol > pos.highest_price:
             pos.highest_price = current_price_sol
 
-        # Append to rolling price history (keep last ~5 min worth)
+        # Append to rolling price history (keep last ~5 min worth).
+        # Tuple shape: (ts, pnl_pct, price_sol). Existing readers consume only
+        # indices 0/1 so the widened tuple is backward-compatible; index 2
+        # feeds the paper executor's latency-honest exit pricing.
         now = time.time()
-        pos.price_history.append((now, pos.pnl_pct))
+        pos.price_history.append((now, pos.pnl_pct, current_price_sol))
         cutoff = now - 300
         if pos.price_history and pos.price_history[0][0] < cutoff:
             pos.price_history = [p for p in pos.price_history if p[0] >= cutoff]
@@ -639,7 +649,14 @@ class RiskManager:
         # Use percentage string — PumpPortal 400s on raw integer token amounts
         # for bonding-curve mints.
         sol_before = await self.wallet.get_sol_balance()
-        result = await self.executor.sell(mint, "100%", reason=reason, prebuilt_tx=prebuilt)
+        # price_history is used by the paper executor for latency-honest exit
+        # pricing on stall-class force-sells. Live executor ignores it.
+        result = await self.executor.sell(
+            mint, "100%",
+            reason=reason,
+            prebuilt_tx=prebuilt,
+            price_history=pos.price_history,
+        )
 
         if not result.get("success"):
             logger.warning(
