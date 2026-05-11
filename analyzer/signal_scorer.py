@@ -21,10 +21,14 @@ from analyzer.auto_tuner import auto_tuner
 from analyzer.counterfactual import counterfactual
 from analyzer.regime_filter import regime_filter
 from analyzer.rug_memory import rug_memory
+from analyzer.signal_fusion import compute_fusion
 from config import (
     ATH_RATIO_REJECT_BELOW,
     BUY_COOLDOWN_SECONDS,
     DEAD_HOURS_UTC,
+    FUSION_ENABLED,
+    FUSION_MAX_BONUS,
+    FUSION_MAX_PENALTY,
     MAX_BONDING_CURVE_PCT,
     MAX_INITIAL_BUY_SOL,
     NAME_BLACKLIST_SUBSTRINGS,
@@ -42,6 +46,7 @@ from detector.influencer_monitor import influencer_monitor
 from detector.pumpfun_tracker import get_pumpfun_state
 from detector.social_monitor import get_social_stats
 from detector.wallet_intel import wallet_intel
+from detector.x_feed import x_feed
 
 
 class SignalScorer:
@@ -135,13 +140,43 @@ class SignalScorer:
             if influencer_monitor.is_mentioned(symbol):
                 token["influencer_mention"] = influencer_monitor.get_mention(symbol)
 
+            # X-feed bridge — tails the standalone x-monitor JSONL output and
+            # exposes a single boolean. Fed to BOTH the four-factor community
+            # score and the fusion engine so X hype can compound when it
+            # aligns with on-chain accumulation.
+            try:
+                if x_feed.has_hype_for(token):
+                    token["x_hype_match"] = True
+            except Exception as e:
+                logger.debug(f"[X-FEED] lookup err for {symbol}: {e}")
+
+            # Cache smart-buyer count on the token so the four-factor scorer
+            # and fusion engine read the same value (and we only hit
+            # wallet_intel once per token).
+            if mint:
+                token["smart_buyer_count"] = len(wallet_intel.smart_buyers_in_window(mint))
+
             score, breakdown = self._compute_score(token)
-            # Stash the RAW (pre-rug-penalty) score so:
+            # Stash the RAW (pre-rug-penalty, pre-fusion) score so:
             #   - rug_memory record + lookup use the SAME bucket key (otherwise
             #     records go in at post-penalty bins and lookups fire at
             #     pre-penalty bins → matches never happen, feature dead)
             #   - downstream logging can show both raw and effective scores
+            #   - fusion changes don't shift the rug_memory bin boundaries
             token["raw_score"] = score
+
+            # Signal fusion: bonus/penalty when independent signals co-fire.
+            # Applied AFTER the four-factor sum so it shows up cleanly in
+            # the breakdown for counterfactual attribution. Capped at
+            # ±FUSION_MAX_BONUS/PENALTY so it can't dominate the score.
+            if FUSION_ENABLED:
+                fusion_delta, fusion_breakdown = compute_fusion(
+                    token, FUSION_MAX_BONUS, FUSION_MAX_PENALTY,
+                )
+                if fusion_delta != 0:
+                    breakdown["fusion"]      = fusion_delta
+                    token["fusion_patterns"] = fusion_breakdown
+                    score = max(0, min(100, score + fusion_delta))
 
             # Rug-pattern memory: if this candidate's feature signature has
             # rugged repeatedly in the past, dock the score. Penalty is 0
@@ -166,11 +201,16 @@ class SignalScorer:
 
             curve_pct = token.get("bonding_curve_pct", 0)
             rug_note  = f" | RUG-MATCH ×{token.get('rug_pattern_matches', 0)} (-{rug_penalty})" if rug_penalty else ""
+            fusion_note = ""
+            if breakdown.get("fusion"):
+                pats = ",".join(token.get("fusion_patterns", {}).keys())
+                fusion_note = f" | FUSION {breakdown['fusion']:+d} ({pats})"
             logger.info(
                 f"[SCORE] {symbol} | {mint[:8]}... | Score: {score}/100 | "
                 f"Curve: {curve_pct:.1f}% | "
                 f"MC: {token.get('market_cap_sol', 0):.1f}S | "
                 f"Creator: {token.get('initial_buy_sol', 0):.2f}S"
+                f"{fusion_note}"
                 f"{rug_note}"
             )
 
@@ -533,6 +573,13 @@ class SignalScorer:
         if token.get("influencer_mention"):
             community_score += 10
             logger.debug(f"[INFLUENCER] {symbol} influencer mention bonus +10")
+        elif token.get("x_hype_match"):
+            # X-feed match without a curated influencer hit — smaller
+            # bonus since the source is generic X hype, not a tracked
+            # account. The fusion engine compounds this further when it
+            # aligns with smart-money or comment velocity.
+            community_score += 4
+            logger.debug(f"[X-HYPE] {symbol} x-monitor hype match +4")
 
         # Fresh launch floor — give minimum so new tokens aren't zero-scored
         if token.get("age_minutes", 99) < 1 and community_score == 0:

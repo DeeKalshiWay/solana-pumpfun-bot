@@ -264,6 +264,16 @@ EARLY_RUG_WINDOW_SEC = _env_int  ("EARLY_RUG_WINDOW_SEC",  60)
 # yes/no review. Range is [SMART_CALLER_MIN, MIN_BUY_SCORE-1].
 SMART_CALLER_MIN = _env_int("SMART_CALLER_MIN", 20)
 
+# Signal fusion: alignment bonus added AFTER the four-factor score when
+# independent signals co-fire (e.g. X mention + smart-money buyer). Caps
+# are deliberately small — fusion is a tie-breaker, not a primary factor.
+# See analyzer/signal_fusion.py for the pattern catalog.
+# Disable via FUSION_ENABLED=0 in .env if a holdout audit shows it's
+# pulling EV in the wrong direction.
+FUSION_ENABLED      = _env_bool ("FUSION_ENABLED",      True)
+FUSION_MAX_BONUS    = _env_int  ("FUSION_MAX_BONUS",    15)
+FUSION_MAX_PENALTY  = _env_int  ("FUSION_MAX_PENALTY",  10)
+
 # Creators that produced rugs we've already lost on, OR rugged after we
 # rejected their token. Block at trade-loop level so we never enter again.
 # The JSON file is rebuilt by `python -m tools.build_rugger_blacklist`
