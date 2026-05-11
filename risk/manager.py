@@ -424,6 +424,59 @@ class RiskManager:
         )
 
     # ── Close position ────────────────────────────────────────────────────────
+    def _record_partial_close(
+        self,
+        mint: str,
+        pos: "Position",
+        sell_fraction: float,
+        sell_result: dict,
+        level_id: str,
+    ) -> None:
+        """Write a take-profit partial sell to closed_trades + trade_db.
+
+        Treats each TP leg as its own trade record so the auto_tuner,
+        rug_memory, and dashboard reflect the SOL the wallet actually
+        received — not just the final exit. The cost basis for the partial
+        is the pre-decrement sol_invested × sell_fraction.
+
+        Position is NOT popped; the caller still owns the residual.
+        """
+        partial_invested = pos.sol_invested * sell_fraction
+        sol_received     = float(sell_result.get("sol_received", 0) or 0)
+        pnl_sol          = sol_received - partial_invested
+
+        trade_record = {
+            "mint":         mint,
+            "symbol":       pos.symbol,
+            "creator":      pos.creator,
+            "entry_time":   pos.entry_time,
+            "exit_time":    time.time(),
+            "sol_invested": partial_invested,
+            "sol_received": sol_received,
+            "pnl_sol":      pnl_sol,
+            "pnl_pct":      pos.pnl_pct,         # at the moment of TP
+            "hold_minutes": pos.age_minutes,
+            "reason":       sell_result.get("reason", level_id),
+            "score":        pos.score,
+            "partial":      True,                # marker for downstream filtering
+            "sol_received_optimistic": sell_result.get("sol_received_optimistic"),
+            "exit_latency_s":          sell_result.get("exit_latency_s"),
+        }
+        self.closed_trades.append(trade_record)
+        self._append_closed_trade(trade_record)
+
+        # Feed the partial gain to the creator tracker too — successful TPs
+        # are useful signal for the creator leaderboard.
+        if pos.creator:
+            creator_tracker.record_trade_result(pos.creator, pnl_sol)
+
+        sign = "+" if pnl_sol >= 0 else ""
+        logger.success(
+            f"[TP PARTIAL CLOSED] {pos.symbol} | leg={level_id} | "
+            f"invested={partial_invested:.4f} → received={sol_received:.4f} | "
+            f"PnL {sign}{pnl_sol:.4f} SOL"
+        )
+
     def close_position(self, mint: str, sell_result: dict):
         pos = self.positions.pop(mint, None)
         if not pos:
@@ -672,6 +725,18 @@ class RiskManager:
                         f"error={result.get('error', 'unknown')} | will retry next tick"
                     )
                     continue  # don't mark level hit; retry on the next monitor pass
+
+                # Record the partial as its own trade BEFORE the cost-basis
+                # decrement, so closed_trades reflects the SOL the wallet
+                # actually received from this leg. Previously TPs were only
+                # locally accounted (pos.sol_invested *= 0.85) and never
+                # written to trades.db — the auto_tuner saw only final
+                # exits per position, which systematically undercounted
+                # wins. Skip the partial record on the final leg (handled
+                # by close_position below) to avoid double-counting.
+                final_leg = int(pos.tokens_held * (1 - sell_fraction)) <= 0
+                if not final_leg:
+                    self._record_partial_close(mint, pos, sell_fraction, result, level_id)
 
                 # Local accounting: PumpPortal sold sell_fraction of the ATA balance,
                 # so reduce our tracked tokens_held + cost basis by the same fraction.
