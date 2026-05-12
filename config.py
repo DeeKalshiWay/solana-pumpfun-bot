@@ -99,6 +99,17 @@ def _load_rpc_urls() -> list[str]:
 
 RPC_URLS = _load_rpc_urls()
 
+# ─── EXPERIMENTAL — local pump.fun tx construction ─────────────────────────
+# Default OFF. When enabled, the PumpPortal executor builds buy/sell
+# transactions locally via trader/local_tx_builder.py instead of calling
+# PumpPortal's /api/trade-local HTTP endpoint. Skips ~200-500ms per tx.
+#
+# ⚠️  Validate against PumpPortal API output BEFORE enabling on a live
+# wallet — the pump.fun program's account order is encoded against an
+# Anchor IDL that wasn't directly verified when the builder was written.
+# See trader/local_tx_builder.py docstring for the validation procedure.
+USE_LOCAL_TX_BUILD = _env_bool("USE_LOCAL_TX_BUILD", False)
+
 # ─── API KEYS ──────────────────────────────────────────────────────────────────
 TWITTER_BEARER_TOKEN = os.getenv("TWITTER_BEARER_TOKEN", "")
 TELEGRAM_API_ID      = int(os.getenv("TELEGRAM_API_ID", "0"))
