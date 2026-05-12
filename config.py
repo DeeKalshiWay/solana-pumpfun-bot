@@ -87,14 +87,76 @@ REPORT_EMAIL_FROM  = os.getenv("REPORT_EMAIL_FROM", "") or SMTP_USER
 # We'll race the same signed tx across RPC_URL + all extras and use whichever
 # accepts/confirms first. Drops Stage-3 tail latency — single-RPC stalls are
 # the long pole on busy slots.
+#
+# Jito region pinning: the generic mainnet.block-engine.jito.wtf URL routes
+# to "whichever Jito node is closest" via DNS — which adds an extra hop and
+# 20-50ms per tx vs. picking the specific regional endpoint. Setting
+# JITO_REGION in .env (e.g. JITO_REGION=ny) prepends the pinned URL to
+# RPC_URLS automatically. Empty / unset = no Jito lane added.
+
+# Known Jito Block Engine regions. URL shape:
+#   https://<region>.mainnet.block-engine.jito.wtf/api/v1/transactions
+# Source: https://docs.jito.wtf/lowlatencytxnsend/
+JITO_REGIONS = {
+    "ny":        "ny.mainnet.block-engine.jito.wtf",          # New York
+    "slc":       "slc.mainnet.block-engine.jito.wtf",         # Salt Lake City
+    "frankfurt": "frankfurt.mainnet.block-engine.jito.wtf",   # Frankfurt
+    "amsterdam": "amsterdam.mainnet.block-engine.jito.wtf",   # Amsterdam
+    "dublin":    "dublin.mainnet.block-engine.jito.wtf",      # Dublin
+    "london":    "london.mainnet.block-engine.jito.wtf",      # London
+    "tokyo":     "tokyo.mainnet.block-engine.jito.wtf",       # Tokyo
+    "singapore": "singapore.mainnet.block-engine.jito.wtf",   # Singapore
+}
+
+
+def _jito_url_for_region(region: str) -> str | None:
+    """Return the pinned regional sendTransaction URL, or None if the
+    region is unknown / empty. Case-insensitive."""
+    key = (region or "").strip().lower()
+    if not key:
+        return None
+    host = JITO_REGIONS.get(key)
+    if not host:
+        return None
+    return f"https://{host}/api/v1/transactions"
+
+
 def _load_rpc_urls() -> list[str]:
     urls = [RPC_URL] if RPC_URL else []
+
+    # Auto-prepend the pinned Jito region URL if JITO_REGION is set.
+    # Prepended (not appended) so the multi-RPC race in pumpportal_executor
+    # benefits from the fastest endpoint first — even though all lanes
+    # race in parallel, the one that fires first wins more often.
+    jito_url = _jito_url_for_region(os.getenv("JITO_REGION", ""))
+    if jito_url and jito_url not in urls:
+        urls.insert(0, jito_url)
+
     extra = os.getenv("EXTRA_RPC_URLS", "").strip()
     if extra:
         for u in extra.split(","):
             u = u.strip()
             if u and u not in urls:
                 urls.append(u)
+
+    # Warn at config-load time if the generic Jito catch-all is in the
+    # list. That URL DNS-routes to whichever node is closest with an extra
+    # hop — 20-50ms slower than naming the regional URL explicitly. We
+    # don't auto-replace it (no way to know which region they meant),
+    # just nudge.
+    for u in urls:
+        if "block-engine.jito.wtf" in u and not any(
+            f"{r}.mainnet.block-engine.jito.wtf" in u for r in JITO_REGIONS
+        ):
+            # Lazy import so config.py stays fast at module load.
+            import logging
+            logging.getLogger(__name__).warning(
+                "[CONFIG] Generic Jito URL detected (%s). Set JITO_REGION=ny|slc|"
+                "frankfurt|amsterdam|dublin|london|tokyo|singapore for a 20-50ms "
+                "tail-latency win on tx submission.", u,
+            )
+            break
+
     return urls
 
 RPC_URLS = _load_rpc_urls()
