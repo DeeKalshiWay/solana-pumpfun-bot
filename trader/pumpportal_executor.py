@@ -352,6 +352,13 @@ class PumpPortalExecutor:
         }
         if confirmed:
             logger.success(f"[PP SELL CONFIRMED] {token_mint[:8]} | reason={reason} | sig: {sig[:20]}")
+            # On a 100% exit, clear the buy-size cache for this mint so a
+            # subsequent re-launch of the same mint (or a stale-ATA recovery
+            # via dump_orphans) doesn't reuse the old buy size to scale the
+            # next sell's priority fee. Partial exits keep the entry — they
+            # still want the original cap for follow-on TPs.
+            if isinstance(token_amount_or_pct, str) and token_amount_or_pct.strip() == "100%":
+                self._buy_size_for_mint.pop(token_mint, None)
         else:
             result["error"] = "unconfirmed"
         return result

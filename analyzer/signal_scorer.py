@@ -188,10 +188,17 @@ class SignalScorer:
             # Rug-pattern memory: if this candidate's feature signature has
             # rugged repeatedly in the past, dock the score. Penalty is 0
             # when there's no match (or fewer than MATCH_MIN_RUGS).
+            #
+            # MUST use token["raw_score"] (pre-fusion, pre-penalty) here.
+            # risk/manager.py:close_position records under pos.raw_score,
+            # so the lookup bucket key has to match the record bucket key
+            # or the feature silently no-ops. This is the cf89f61 contract;
+            # the previous code regressed once fusion landed because `score`
+            # here had already been mutated by fusion.
             rug_features = {
                 "initial_buy_sol":   token.get("initial_buy_sol", 0),
                 "bonding_curve_pct": token.get("bonding_curve_pct", 0),
-                "score":             score,   # use RAW score for the bucket key
+                "score":             token["raw_score"],
             }
             rug_penalty = rug_memory.score_penalty(rug_features)
             if rug_penalty > 0:

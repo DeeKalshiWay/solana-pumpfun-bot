@@ -45,6 +45,10 @@ WHALE_MIN_AVG_TRADE_SOL   = float(os.environ.get("WHALE_MIN_AVG_TRADE_SOL",  "1.
 # kept anyway — the scorer might still ask. But entries older than this
 # get pruned from the per-mint buyer cache.
 WHALE_WINDOW_S            = float(os.environ.get("WHALE_WINDOW_S",           "10.0"))
+# Buys that arrive before the matching create get queued for this long
+# waiting for the create event. WS ordering on PumpPortal is normally fine
+# but reorgs / network jitter can flip the order on tight launches.
+WHALE_PENDING_GRACE_S     = float(os.environ.get("WHALE_PENDING_GRACE_S",    "5.0"))
 # Eviction caps. Whale wallets are tiny (≤ a few hundred globally) but the
 # tracker SEES every buyer; non-whale rows are evicted LRU by last_seen.
 MAX_TRACKED_WALLETS       = int(os.environ.get("WHALE_MAX_TRACKED",          "5000"))
@@ -65,6 +69,12 @@ class WhaleTracker:
         self._mint_buyers: dict[str, list[tuple[str, float]]] = {}
         # mint -> create_ts (so we know when the buy window started)
         self._mint_created: dict[str, float] = {}
+        # WS messages can arrive out of order on busy networks — buy events
+        # sometimes land before their matching create. Buffer such buys
+        # briefly so we can replay them once create finally arrives. Without
+        # this, ~5–10% of early whale buys on volatile launches are silently
+        # dropped. Entries older than WHALE_PENDING_GRACE_S are pruned.
+        self._pending_buys: dict[str, list[tuple[str, float, float]]] = {}
         self._writes_since_save = 0
         self._load()
 
@@ -130,8 +140,24 @@ class WhaleTracker:
 
     def _on_create(self, data: dict) -> None:
         mint = data.get("mint")
-        if mint:
-            self._mint_created[mint] = time.time()
+        if not mint:
+            return
+        now = time.time()
+        self._mint_created[mint] = now
+        # Drain any buys we received before the create event. They're valid
+        # only if they arrived within the create window we're about to open
+        # for this mint.
+        pending = self._pending_buys.pop(mint, None)
+        if not pending:
+            return
+        for addr, sol_amount, ts in pending:
+            if (now - ts) > WHALE_PENDING_GRACE_S:
+                continue   # too old; drop
+            w = self._wallets.get(addr)
+            if w and self._is_whale_row(w):
+                buyers = self._mint_buyers.setdefault(mint, [])
+                if not any(a == addr for a, _ in buyers):
+                    buyers.append((addr, ts))
 
     def _on_trade(self, data: dict) -> None:
         """Hot path: keep it short. Aggregate SOL volume per wallet,
@@ -168,20 +194,47 @@ class WhaleTracker:
         # Per-mint whale buyer cache for the scorer's window query.
         if tx_type == "buy" and mint:
             created = self._mint_created.get(mint)
-            in_window = (created is not None and (now - created) <= WHALE_WINDOW_S)
-            if in_window and self._is_whale_row(w):
-                buyers = self._mint_buyers.setdefault(mint, [])
-                # Dedup per mint — same whale buying twice doesn't double-count.
-                if not any(a == addr for a, _ in buyers):
-                    buyers.append((addr, now))
+            if created is None:
+                # Buy arrived before the create event (WS reorder / jitter).
+                # Buffer it; _on_create drains the pending list on its way
+                # in. Only whales need this — pleb buys for unknown mints
+                # are no signal.
+                if self._is_whale_row(w):
+                    self._pending_buys.setdefault(mint, []).append((addr, amount, now))
+                    # Prune entries older than the grace window to bound memory.
+                    cutoff = now - WHALE_PENDING_GRACE_S
+                    self._pending_buys[mint] = [
+                        e for e in self._pending_buys[mint] if e[2] >= cutoff
+                    ]
+            else:
+                in_window = (now - created) <= WHALE_WINDOW_S
+                if in_window and self._is_whale_row(w):
+                    buyers = self._mint_buyers.setdefault(mint, [])
+                    # Dedup per mint — same whale buying twice doesn't double-count.
+                    if not any(a == addr for a, _ in buyers):
+                        buyers.append((addr, now))
 
         # Eviction + throttled save.
         self._writes_since_save += 1
         if len(self._wallets) > MAX_TRACKED_WALLETS:
-            # Drop oldest by LRU. OrderedDict iterates oldest-first.
+            # Drop oldest by LRU but PIN classified whales — a whale that
+            # goes dormant for an hour while 5000 noise wallets cycle
+            # through shouldn't lose its classification. Iterate from
+            # oldest; skip whales; pop the first non-whale found.
             n_to_drop = len(self._wallets) - MAX_TRACKED_WALLETS
             for _ in range(n_to_drop):
-                self._wallets.popitem(last=False)
+                victim = None
+                for cand_addr, cand_row in self._wallets.items():
+                    if not self._is_whale_row(cand_row):
+                        victim = cand_addr
+                        break
+                if victim is None:
+                    # Cache is entirely whales — that's a > 5000 whale
+                    # global pop. Tune MAX_TRACKED_WALLETS up, but for
+                    # now drop the oldest entry to bound memory.
+                    self._wallets.popitem(last=False)
+                else:
+                    self._wallets.pop(victim, None)
         if len(self._mint_buyers) > MAX_MINT_BUYERS:
             # Prune the oldest mint buckets by their earliest buyer ts.
             oldest = sorted(
