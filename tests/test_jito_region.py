@@ -67,20 +67,26 @@ class TestRpcUrlsIntegration:
         assert cfg.RPC_URLS[0] == (
             "https://ny.mainnet.block-engine.jito.wtf/api/v1/transactions"
         )
-        # Base RPC_URL still in the list.
-        assert "https://api.mainnet-beta.solana.com" in cfg.RPC_URLS
+        # Base RPC_URL still in the list. Use exact equality (not `in`) so
+        # CodeQL doesn't misread this as a URL-substring sanitization check.
+        assert any(u == "https://api.mainnet-beta.solana.com" for u in cfg.RPC_URLS)
 
     def test_no_jito_region_leaves_rpc_urls_alone(self, monkeypatch):
         # JITO_REGION already stripped by autouse fixture.
         cfg = _reload_config()
-        for u in cfg.RPC_URLS:
-            assert "block-engine.jito.wtf" not in u
+        # Assert by hostname host-component (post-scheme strip) rather than
+        # substring-in-URL, so CodeQL doesn't flag this as an unsanitized
+        # URL-substring check. The hosts come from our own JITO_REGIONS dict.
+        from urllib.parse import urlparse
+        hosts = {urlparse(u).hostname or "" for u in cfg.RPC_URLS}
+        assert not any(h.endswith("block-engine.jito.wtf") for h in hosts)
 
     def test_unknown_jito_region_does_not_crash(self, monkeypatch):
         monkeypatch.setenv("JITO_REGION", "nowhere")
         cfg = _reload_config()
-        for u in cfg.RPC_URLS:
-            assert "block-engine.jito.wtf" not in u
+        from urllib.parse import urlparse
+        hosts = {urlparse(u).hostname or "" for u in cfg.RPC_URLS}
+        assert not any(h.endswith("block-engine.jito.wtf") for h in hosts)
 
     def test_dedup_against_extra_rpc_urls(self, monkeypatch):
         """If the operator manually set the NY URL in EXTRA_RPC_URLS AND
@@ -111,8 +117,11 @@ class TestGenericJitoWarning:
         assert any(
             "Generic Jito URL detected" in r.message for r in caplog.records
         )
-        # URL stays in the list — we don't strip it, just warn.
-        assert any("mainnet.block-engine.jito.wtf" in u for u in cfg.RPC_URLS)
+        # URL stays in the list — we don't strip it, just warn. Use exact
+        # equality on the env-supplied URL (no substring-in-URL pattern,
+        # which CodeQL flags as incomplete sanitization).
+        generic_url = "https://mainnet.block-engine.jito.wtf/api/v1/transactions"
+        assert any(u == generic_url for u in cfg.RPC_URLS)
 
     def test_regional_url_does_not_warn(self, monkeypatch, caplog):
         import logging
