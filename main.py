@@ -6,6 +6,7 @@ spending real SOL. Set False to go live.
 
 import asyncio
 import faulthandler
+import os
 import signal
 import sys
 import threading
@@ -529,6 +530,27 @@ async def main():
         asyncio.create_task(auto_tuner.run(),                                               name="auto_tuner"),
         asyncio.create_task(daily_reporter.run(),                                           name="daily_report"),
     ]
+
+    # Dev-only: if SYNTHETIC_INJECT is set, push N synthetic tokens through
+    # the raw_queue at startup. Used when the live PumpPortal WS is
+    # unreachable (sandboxed IPs) to prove the rest of the decision
+    # pipeline fires end-to-end. SAFE only in PAPER_TRADING mode.
+    _synth_n = os.environ.get("SYNTHETIC_INJECT", "")
+    if _synth_n and PAPER_TRADING:
+        try:
+            n = max(1, int(_synth_n))
+            from tools.synthetic_injector import inject_synthetic_tokens
+            tasks.append(asyncio.create_task(
+                inject_synthetic_tokens(raw_queue, count=n, interval_s=6.0),
+                name="synthetic_inject",
+            ))
+        except Exception as e:
+            logger.warning(f"[SYNTHETIC] failed to start injector: {e}")
+    elif _synth_n and not PAPER_TRADING:
+        logger.critical(
+            "[SYNTHETIC] Refusing to inject synthetic tokens in LIVE mode "
+            "(SYNTHETIC_INJECT only valid with PAPER_TRADING=true)."
+        )
 
     logger.success("All systems GO — bot is live")
 
