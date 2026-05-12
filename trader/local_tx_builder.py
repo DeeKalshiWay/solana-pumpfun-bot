@@ -210,3 +210,178 @@ def build_sell_instruction(
         data       = data,
         accounts   = _swap_account_metas(resolve_swap_accounts(user, mint)),
     )
+
+
+# ── Bonding-curve math (pump.fun constant-product) ──────────────────────────
+#
+# pump.fun uses virtual reserves (v_sol, v_token). At buy time you put in
+# `sol_in` and you receive `tokens_out` such that the product stays constant:
+#
+#   (v_sol + sol_in) * (v_token - tokens_out) = v_sol * v_token
+#
+# Solving for tokens_out:
+#
+#   tokens_out = v_token - (v_sol * v_token) / (v_sol + sol_in)
+#              = v_token * sol_in / (v_sol + sol_in)
+#
+# Symmetric on the sell side:
+#
+#   sol_out = v_sol * tokens_in / (v_token + tokens_in)
+#
+# Caller passes virtual reserves read from the bonding curve PDA. These
+# units are the same as what the program stores: SOL is in lamports
+# (u64), tokens are in raw u64 (account for decimals — pump.fun mints
+# use 6 decimals so 1 token = 1_000_000 raw units).
+
+
+def expected_tokens_for_sol(v_sol: int, v_token: int, sol_in: int) -> int:
+    """Pump.fun buy math. Returns raw token units the swap will yield
+    given the current curve state, BEFORE slippage padding.
+
+    Pure function; deterministic; no I/O. Integer math (floor-div) —
+    matches the on-chain Anchor program's integer arithmetic.
+    """
+    if v_sol <= 0 or v_token <= 0 or sol_in <= 0:
+        return 0
+    return (v_token * sol_in) // (v_sol + sol_in)
+
+
+def expected_sol_for_tokens(v_sol: int, v_token: int, tokens_in: int) -> int:
+    """Pump.fun sell math. Returns raw lamports the swap will yield
+    given current curve state, BEFORE slippage padding."""
+    if v_sol <= 0 or v_token <= 0 or tokens_in <= 0:
+        return 0
+    return (v_sol * tokens_in) // (v_token + tokens_in)
+
+
+def apply_buy_slippage(expected_tokens: int, slippage_bps: int) -> int:
+    """Min tokens to accept = expected * (1 - slippage). Floor-div for
+    safety — never round in a direction that lets the program reject."""
+    if expected_tokens <= 0:
+        return 0
+    bps_floor = max(0, 10_000 - max(0, slippage_bps))
+    return (expected_tokens * bps_floor) // 10_000
+
+
+def apply_buy_max_sol(sol_amount_lamports: int, slippage_bps: int) -> int:
+    """Max lamports willing to spend = sol_amount * (1 + slippage). Ceil
+    so the program doesn't reject on rounding."""
+    if sol_amount_lamports <= 0:
+        return 0
+    bps_ceil = 10_000 + max(0, slippage_bps)
+    # Ceiling integer division: (a*b + d - 1) // d
+    return (sol_amount_lamports * bps_ceil + 10_000 - 1) // 10_000
+
+
+def apply_sell_min_sol(expected_sol: int, slippage_bps: int) -> int:
+    """Min lamports to accept = expected_sol * (1 - slippage). Floor."""
+    if expected_sol <= 0:
+        return 0
+    bps_floor = max(0, 10_000 - max(0, slippage_bps))
+    return (expected_sol * bps_floor) // 10_000
+
+
+# ── ComputeBudget instructions ──────────────────────────────────────────────
+# Prepended to every swap tx so we (a) cap CU usage so the tx fits in a
+# block, (b) tip the validator a per-CU priority fee. solders ships
+# helpers for both.
+
+from solders.compute_budget import set_compute_unit_limit, set_compute_unit_price  # noqa: E402
+
+
+def compute_budget_instructions(cu_limit: int, cu_price_micro_lamports: int) -> list[Instruction]:
+    """Returns [set_compute_unit_limit, set_compute_unit_price] in the
+    order that needs to land in the tx (limit first, then price)."""
+    return [
+        set_compute_unit_limit(int(cu_limit)),
+        set_compute_unit_price(int(cu_price_micro_lamports)),
+    ]
+
+
+# ── Full transaction assembly ───────────────────────────────────────────────
+# Returns serialized v0 VersionedTransaction bytes WITHOUT a real signature
+# — _sign_and_send in pumpportal_executor deserializes the bytes, signs with
+# the operator's keypair, and re-serializes. Same shape as what PumpPortal's
+# /api/trade-local returns.
+
+from solders.hash import Hash  # noqa: E402
+from solders.message import MessageV0  # noqa: E402
+from solders.null_signer import NullSigner  # noqa: E402
+from solders.transaction import VersionedTransaction  # noqa: E402
+
+
+def _assemble_tx_bytes(
+    payer:            Pubkey,
+    instructions:     list[Instruction],
+    recent_blockhash: Hash,
+) -> bytes:
+    """Build a v0 VersionedTransaction, placeholder-signed with NullSigner,
+    serialized to bytes. Compatible with pumpportal_executor._sign_and_send
+    which expects to be able to deserialize, re-sign, and submit."""
+    msg = MessageV0.try_compile(
+        payer=payer,
+        instructions=instructions,
+        address_lookup_table_accounts=[],
+        recent_blockhash=recent_blockhash,
+    )
+    # NullSigner produces a 64-byte zero signature — same as what an
+    # unsigned tx looks like. _sign_and_send re-signs with the real key.
+    tx = VersionedTransaction(msg, [NullSigner(payer)])
+    return bytes(tx)
+
+
+def build_buy_tx_bytes(
+    *,
+    user:                    Pubkey,
+    mint:                    Pubkey,
+    sol_amount_lamports:     int,
+    v_sol_reserves:          int,
+    v_token_reserves:        int,
+    slippage_bps:            int,
+    cu_limit:                int,
+    cu_price_micro_lamports: int,
+    recent_blockhash:        Hash,
+) -> bytes:
+    """End-to-end buy tx assembly. Takes curve reserves so the caller
+    can either read them fresh from the PDA or use a cached snapshot.
+
+    Returns serialized unsigned v0 tx bytes."""
+    expected = expected_tokens_for_sol(v_sol_reserves, v_token_reserves, sol_amount_lamports)
+    if expected <= 0:
+        raise ValueError(
+            f"buy math gave 0 tokens: v_sol={v_sol_reserves} v_token={v_token_reserves} "
+            f"sol_in={sol_amount_lamports}",
+        )
+    min_tokens   = apply_buy_slippage(expected, slippage_bps)
+    max_sol_cost = apply_buy_max_sol(sol_amount_lamports, slippage_bps)
+    buy_ix = build_buy_instruction(user, mint, min_tokens, max_sol_cost)
+    return _assemble_tx_bytes(
+        payer=user,
+        instructions=compute_budget_instructions(cu_limit, cu_price_micro_lamports) + [buy_ix],
+        recent_blockhash=recent_blockhash,
+    )
+
+
+def build_sell_tx_bytes(
+    *,
+    user:                    Pubkey,
+    mint:                    Pubkey,
+    token_amount:            int,
+    v_sol_reserves:          int,
+    v_token_reserves:        int,
+    slippage_bps:            int,
+    cu_limit:                int,
+    cu_price_micro_lamports: int,
+    recent_blockhash:        Hash,
+) -> bytes:
+    """End-to-end sell tx assembly. Returns serialized unsigned v0 tx bytes."""
+    if token_amount <= 0:
+        raise ValueError(f"sell with non-positive token_amount: {token_amount}")
+    expected_sol  = expected_sol_for_tokens(v_sol_reserves, v_token_reserves, token_amount)
+    min_sol_output = apply_sell_min_sol(expected_sol, slippage_bps)
+    sell_ix = build_sell_instruction(user, mint, token_amount, min_sol_output)
+    return _assemble_tx_bytes(
+        payer=user,
+        instructions=compute_budget_instructions(cu_limit, cu_price_micro_lamports) + [sell_ix],
+        recent_blockhash=recent_blockhash,
+    )

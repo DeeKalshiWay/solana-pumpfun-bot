@@ -14,7 +14,16 @@ from loguru import logger
 from solders.keypair import Keypair
 from solders.transaction import VersionedTransaction
 
-from config import PRIORITY_FEE_SOL, RPC_URL, RPC_URLS, SELL_PRIORITY_FEE_SOL, SLIPPAGE_BPS
+from config import (
+    COMPUTE_UNIT_LIMIT,
+    COMPUTE_UNIT_PRICE_MICROLAMPORTS,
+    PRIORITY_FEE_SOL,
+    RPC_URL,
+    RPC_URLS,
+    SELL_PRIORITY_FEE_SOL,
+    SLIPPAGE_BPS,
+    USE_LOCAL_TX_BUILD,
+)
 
 PUMPPORTAL_LOCAL_API = "https://pumpportal.fun/api/trade-local"
 
@@ -41,8 +50,153 @@ class PumpPortalExecutor:
         if self.session:
             await self.session.close()
 
+    async def _fetch_recent_blockhash(self):
+        """Fetch a recent blockhash via RPC. Returns solders.hash.Hash, or
+        None on RPC error. ~30-50ms. Used only on the local-tx path; the
+        PumpPortal-HTTP path embeds its own blockhash."""
+        from solders.hash import Hash as _Hash  # local import to keep
+        payload = {                              # the module fast at load
+            "jsonrpc": "2.0", "id": 1, "method": "getLatestBlockhash",
+            "params": [{"commitment": "confirmed"}],
+        }
+        try:
+            async with self.session.post(
+                RPC_URL, json=payload,
+                timeout=aiohttp.ClientTimeout(total=3),
+            ) as resp:
+                data = await resp.json()
+            bh_str = data.get("result", {}).get("value", {}).get("blockhash")
+            if not bh_str:
+                return None
+            return _Hash.from_string(bh_str)
+        except Exception as e:
+            logger.debug(f"[PP LOCAL] blockhash fetch failed: {e}")
+            return None
+
+    async def _fetch_bonding_curve_reserves(self, mint: str):
+        """Read v_sol + v_token reserves from the bonding-curve PDA. Returns
+        (v_sol_lamports, v_token_raw) or None on failure. The pump.fun
+        bonding-curve account layout: 8b Anchor discriminator + u64
+        v_token + u64 v_sol + ... (matches main.py:_bonding_curve_price)."""
+        import base64
+        import struct
+
+        from solders.pubkey import Pubkey as _Pubkey
+
+        from trader.local_tx_builder import PUMP_FUN_PROGRAM, bonding_curve_pda
+
+        try:
+            bc = bonding_curve_pda(_Pubkey.from_string(mint))
+            payload = {
+                "jsonrpc": "2.0", "id": 1, "method": "getAccountInfo",
+                "params": [str(bc), {"encoding": "base64", "commitment": "confirmed"}],
+            }
+            async with self.session.post(
+                RPC_URL, json=payload,
+                timeout=aiohttp.ClientTimeout(total=3),
+            ) as resp:
+                data = await resp.json()
+            val = (data.get("result") or {}).get("value")
+            if not val:
+                return None   # mint migrated or curve closed
+            raw = base64.b64decode(val["data"][0])
+            v_token, v_sol = struct.unpack_from("<QQ", raw, 8)
+            if v_token == 0 or v_sol == 0:
+                return None
+            _ = PUMP_FUN_PROGRAM   # silence unused-import linter
+            return (v_sol, v_token)
+        except Exception as e:
+            logger.debug(f"[PP LOCAL] curve read err for {mint[:8]}: {e}")
+            return None
+
+    async def _build_tx_local(self, action: str, mint: str, amount, denominated_in_sol: bool):
+        """Local pump.fun tx assembly — skips the PumpPortal HTTP roundtrip.
+        Returns serialized v0 VersionedTransaction bytes, or None on any
+        failure (caller falls back to the HTTP path). EXPERIMENTAL — gated
+        on USE_LOCAL_TX_BUILD; default off.
+
+        Limitations (caller MUST gate before invoking):
+          - Only handles integer amounts. PumpPortal's "X%" string format
+            for sells is not supported; risk_manager passes those strings
+            to force-sells, so this path is currently buy-only + integer-sell.
+        """
+        from solders.pubkey import Pubkey as _Pubkey
+
+        from trader.local_tx_builder import build_buy_tx_bytes, build_sell_tx_bytes
+
+        # Parallel RPC: blockhash + curve reserves at the same time.
+        # Saves ~50ms vs sequential.
+        bh, reserves = await asyncio.gather(
+            self._fetch_recent_blockhash(),
+            self._fetch_bonding_curve_reserves(mint),
+            return_exceptions=False,
+        )
+        if bh is None or reserves is None:
+            return None
+        v_sol_reserves, v_token_reserves = reserves
+        user_pk = _Pubkey.from_string(str(self.pubkey))
+        mint_pk = _Pubkey.from_string(mint)
+
+        if action == "buy":
+            sol_amount_lamports = int(round(float(amount) * 1_000_000_000))
+            return build_buy_tx_bytes(
+                user                    = user_pk,
+                mint                    = mint_pk,
+                sol_amount_lamports     = sol_amount_lamports,
+                v_sol_reserves          = v_sol_reserves,
+                v_token_reserves        = v_token_reserves,
+                slippage_bps            = SLIPPAGE_BPS,
+                cu_limit                = COMPUTE_UNIT_LIMIT,
+                cu_price_micro_lamports = COMPUTE_UNIT_PRICE_MICROLAMPORTS,
+                recent_blockhash        = bh,
+            )
+        elif action == "sell" and not denominated_in_sol:
+            return build_sell_tx_bytes(
+                user                    = user_pk,
+                mint                    = mint_pk,
+                token_amount            = int(amount),
+                v_sol_reserves          = v_sol_reserves,
+                v_token_reserves        = v_token_reserves,
+                slippage_bps            = SLIPPAGE_BPS,
+                cu_limit                = COMPUTE_UNIT_LIMIT,
+                cu_price_micro_lamports = COMPUTE_UNIT_PRICE_MICROLAMPORTS,
+                recent_blockhash        = bh,
+            )
+        return None
+
+    @staticmethod
+    def _local_tx_eligible(action: str, amount, denominated_in_sol: bool) -> bool:
+        """Decide whether the local builder can handle this (action, amount)
+        combination. Conservative: any unsupported shape falls back to
+        the PumpPortal HTTP path."""
+        if not USE_LOCAL_TX_BUILD:
+            return False
+        if action == "buy":
+            # buys always denominated in SOL; amount is the SOL float.
+            return denominated_in_sol and isinstance(amount, (int, float)) and float(amount) > 0
+        if action == "sell":
+            # local sell needs an integer token count. "X%" strings fall
+            # back to PumpPortal which resolves the percentage server-side.
+            return (not denominated_in_sol) and isinstance(amount, int) and amount > 0
+        return False
+
     async def _build_tx(self, action: str, mint: str, amount, denominated_in_sol: bool):
-        """Request a serialized transaction from PumpPortal."""
+        """Request a serialized transaction. If USE_LOCAL_TX_BUILD is on AND
+        the (action, amount) shape is supported, build it locally (saves
+        ~200-500ms vs the PumpPortal HTTP roundtrip). Any local-path
+        failure transparently falls back to the HTTP path."""
+        if self._local_tx_eligible(action, amount, denominated_in_sol):
+            try:
+                tx_bytes = await self._build_tx_local(action, mint, amount, denominated_in_sol)
+                if tx_bytes is not None:
+                    logger.debug(f"[PP LOCAL] {action} {mint[:8]} built locally")
+                    return tx_bytes
+            except Exception as e:
+                logger.warning(
+                    f"[PP LOCAL] {action} {mint[:8]} local build failed ({e}); "
+                    "falling back to PumpPortal HTTP"
+                )
+            # Fall through to the HTTP path on None or exception.
         # PumpPortal expects total priority fee in SOL (not per-CU microlamports).
         # Sells need higher priority during dumps; but at small trade sizes a
         # fixed 0.005 SOL fee becomes 50-70% drag. Scale it so it's always at

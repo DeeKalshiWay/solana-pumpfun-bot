@@ -172,6 +172,13 @@ RPC_URLS = _load_rpc_urls()
 # See trader/local_tx_builder.py docstring for the validation procedure.
 USE_LOCAL_TX_BUILD = _env_bool("USE_LOCAL_TX_BUILD", False)
 
+# Compute Budget knobs for the local tx path. pump.fun swaps are simple
+# and fit easily in 200K CU; the CU PRICE (in micro-lamports per CU) is
+# the per-CU priority fee. Total tx priority fee paid = CU_LIMIT × CU_PRICE / 1e6
+# lamports. 200_000 × 300_000 / 1e6 = 60_000 lamports = 0.00006 SOL.
+COMPUTE_UNIT_LIMIT                = _env_int("COMPUTE_UNIT_LIMIT",                200_000)
+COMPUTE_UNIT_PRICE_MICROLAMPORTS  = _env_int("COMPUTE_UNIT_PRICE_MICROLAMPORTS",  300_000)
+
 # ─── API KEYS ──────────────────────────────────────────────────────────────────
 TWITTER_BEARER_TOKEN = os.getenv("TWITTER_BEARER_TOKEN", "")
 TELEGRAM_API_ID      = int(os.getenv("TELEGRAM_API_ID", "0"))

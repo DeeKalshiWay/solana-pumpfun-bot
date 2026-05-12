@@ -262,3 +262,189 @@ class TestGoldenBytes:
             + struct.pack("<Q", 11111)
         )
         assert bytes(ix.data) == expected
+
+
+# ── Bonding-curve math ─────────────────────────────────────────────────────
+
+from trader.local_tx_builder import (  # noqa: E402
+    apply_buy_max_sol,
+    apply_buy_slippage,
+    apply_sell_min_sol,
+    build_buy_tx_bytes,
+    build_sell_tx_bytes,
+    compute_budget_instructions,
+    expected_sol_for_tokens,
+    expected_tokens_for_sol,
+)
+
+
+class TestBondingCurveMath:
+    """Pump.fun uses constant-product (v_sol + sol_in)(v_token - tokens_out) =
+    v_sol * v_token. Integer math, floor-div, matches the on-chain
+    Anchor program."""
+
+    def test_expected_tokens_for_sol_basic(self):
+        # v_sol=30 SOL, v_token=1B raw, sol_in=0.1 SOL
+        # tokens_out = 1e9 * 1e8 / (3e10 + 1e8) = ~3,322,259
+        v_sol   = 30 * 10**9      # 30 SOL in lamports
+        v_token = 1_000_000_000   # 1B raw
+        sol_in  = 100_000_000     # 0.1 SOL
+        out = expected_tokens_for_sol(v_sol, v_token, sol_in)
+        # Floor-div formula: (v_token * sol_in) // (v_sol + sol_in)
+        assert out == (v_token * sol_in) // (v_sol + sol_in)
+        assert out > 0
+
+    def test_expected_tokens_returns_zero_on_bad_inputs(self):
+        assert expected_tokens_for_sol(0, 100, 100) == 0
+        assert expected_tokens_for_sol(100, 0, 100) == 0
+        assert expected_tokens_for_sol(100, 100, 0) == 0
+
+    def test_expected_sol_for_tokens_symmetric(self):
+        v_sol   = 30 * 10**9
+        v_token = 1_000_000_000
+        out = expected_sol_for_tokens(v_sol, v_token, 100_000)
+        assert out == (v_sol * 100_000) // (v_token + 100_000)
+
+
+class TestSlippageMath:
+    def test_buy_slippage_floor(self):
+        # 1000 expected tokens, 15% slippage → min 850 accepted
+        assert apply_buy_slippage(1000, 1500) == 850
+        # 0% slippage = pass-through
+        assert apply_buy_slippage(1000, 0) == 1000
+
+    def test_buy_max_sol_ceiling(self):
+        # 1000 lamports, 15% slippage → max 1150
+        assert apply_buy_max_sol(1000, 1500) == 1150
+        # 0% slippage = pass-through (with ceiling round)
+        assert apply_buy_max_sol(1000, 0) == 1000
+
+    def test_sell_min_sol_floor(self):
+        assert apply_sell_min_sol(1000, 1500) == 850
+        assert apply_sell_min_sol(1000, 0) == 1000
+
+    def test_slippage_zero_edge_cases(self):
+        assert apply_buy_slippage(0, 1500) == 0
+        assert apply_buy_max_sol(0, 1500) == 0
+        assert apply_sell_min_sol(0, 1500) == 0
+
+
+class TestComputeBudgetInstructions:
+    def test_returns_two_instructions_in_order(self):
+        ixs = compute_budget_instructions(cu_limit=200_000, cu_price_micro_lamports=300_000)
+        assert len(ixs) == 2
+        # Both target the ComputeBudget program. solders' helpers set this
+        # internally; just sanity-check we got two distinct ix.
+        from solders.pubkey import Pubkey
+        cb_program = Pubkey.from_string("ComputeBudget111111111111111111111111111111")
+        assert ixs[0].program_id == cb_program
+        assert ixs[1].program_id == cb_program
+        assert ixs[0].data != ixs[1].data
+
+
+# ── Full tx assembly ───────────────────────────────────────────────────────
+
+class TestBuildBuyTxBytes:
+    def test_returns_non_empty_bytes(self):
+        from solders.hash import Hash
+        b = build_buy_tx_bytes(
+            user                    = _USER,
+            mint                    = _MINT,
+            sol_amount_lamports     = 10_000_000,        # 0.01 SOL
+            v_sol_reserves          = 30 * 10**9,
+            v_token_reserves        = 1_000_000_000_000,
+            slippage_bps            = 1500,
+            cu_limit                = 200_000,
+            cu_price_micro_lamports = 300_000,
+            recent_blockhash        = Hash.default(),
+        )
+        assert isinstance(b, bytes)
+        assert len(b) > 100   # serialized tx is non-trivial
+
+    def test_round_trips_through_versioned_tx(self):
+        """Bytes returned must deserialize back to a VersionedTransaction
+        — pumpportal_executor._sign_and_send needs this so it can re-sign."""
+        from solders.hash import Hash
+        from solders.transaction import VersionedTransaction
+        b = build_buy_tx_bytes(
+            user=_USER, mint=_MINT,
+            sol_amount_lamports=10_000_000,
+            v_sol_reserves=30 * 10**9, v_token_reserves=1_000_000_000_000,
+            slippage_bps=1500, cu_limit=200_000, cu_price_micro_lamports=300_000,
+            recent_blockhash=Hash.default(),
+        )
+        tx = VersionedTransaction.from_bytes(b)
+        # 3 instructions: CU limit, CU price, pump.fun buy
+        assert len(tx.message.instructions) == 3
+
+    def test_raises_on_zero_expected_tokens(self):
+        from solders.hash import Hash
+        with pytest.raises(ValueError):
+            build_buy_tx_bytes(
+                user=_USER, mint=_MINT,
+                sol_amount_lamports=0,                          # zero in
+                v_sol_reserves=30 * 10**9, v_token_reserves=1_000_000_000_000,
+                slippage_bps=1500, cu_limit=200_000, cu_price_micro_lamports=300_000,
+                recent_blockhash=Hash.default(),
+            )
+
+
+class TestBuildSellTxBytes:
+    def test_returns_non_empty_bytes(self):
+        from solders.hash import Hash
+        b = build_sell_tx_bytes(
+            user=_USER, mint=_MINT,
+            token_amount=1_000_000,
+            v_sol_reserves=30 * 10**9, v_token_reserves=1_000_000_000_000,
+            slippage_bps=1500, cu_limit=200_000, cu_price_micro_lamports=300_000,
+            recent_blockhash=Hash.default(),
+        )
+        assert isinstance(b, bytes)
+        assert len(b) > 100
+
+    def test_raises_on_non_positive_amount(self):
+        from solders.hash import Hash
+        with pytest.raises(ValueError):
+            build_sell_tx_bytes(
+                user=_USER, mint=_MINT,
+                token_amount=0,
+                v_sol_reserves=30 * 10**9, v_token_reserves=1_000_000_000_000,
+                slippage_bps=1500, cu_limit=200_000, cu_price_micro_lamports=300_000,
+                recent_blockhash=Hash.default(),
+            )
+
+
+class TestLocalTxEligibility:
+    """The fallback gate that decides whether the local builder can
+    handle a given (action, amount) shape. Conservative — anything
+    unfamiliar falls through to the PumpPortal HTTP path."""
+
+    def test_off_by_default(self, monkeypatch):
+        # config.USE_LOCAL_TX_BUILD is loaded at module import; eligibility
+        # function reads it lazily from the imported namespace. Patch the
+        # value in pumpportal_executor.
+        import trader.pumpportal_executor as pp
+        monkeypatch.setattr(pp, "USE_LOCAL_TX_BUILD", False)
+        assert pp.PumpPortalExecutor._local_tx_eligible("buy", 0.1, True) is False
+
+    def test_enabled_buy(self, monkeypatch):
+        import trader.pumpportal_executor as pp
+        monkeypatch.setattr(pp, "USE_LOCAL_TX_BUILD", True)
+        assert pp.PumpPortalExecutor._local_tx_eligible("buy", 0.1, True) is True
+
+    def test_enabled_sell_integer(self, monkeypatch):
+        import trader.pumpportal_executor as pp
+        monkeypatch.setattr(pp, "USE_LOCAL_TX_BUILD", True)
+        assert pp.PumpPortalExecutor._local_tx_eligible("sell", 1_000_000, False) is True
+
+    def test_enabled_sell_percent_string_falls_back(self, monkeypatch):
+        """Risk_manager passes '100%' for force-sells. Local path can't
+        resolve that → must say not eligible so the HTTP path handles it."""
+        import trader.pumpportal_executor as pp
+        monkeypatch.setattr(pp, "USE_LOCAL_TX_BUILD", True)
+        assert pp.PumpPortalExecutor._local_tx_eligible("sell", "100%", False) is False
+
+    def test_buy_with_zero_amount_not_eligible(self, monkeypatch):
+        import trader.pumpportal_executor as pp
+        monkeypatch.setattr(pp, "USE_LOCAL_TX_BUILD", True)
+        assert pp.PumpPortalExecutor._local_tx_eligible("buy", 0, True) is False
