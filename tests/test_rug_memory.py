@@ -155,3 +155,33 @@ class TestPersistence:
         # New instance reads the same file.
         rm2 = rug_mod.RugMemory()
         assert rm2.matched_count(feats) == 5
+
+
+class TestScorerWiringContract:
+    """Pin the contract that signal_scorer feeds rug_memory using the
+    PRE-FUSION pre-rug-penalty raw_score as the bucket key. This is the
+    wiring layer the in-isolation tests above don't cover — and the
+    layer that regressed after fusion landed (rug bucket recorded
+    under pre-fusion, looked up under post-fusion → silent no-op).
+
+    These tests assert on the file content directly so they fail loudly
+    if someone re-introduces the bug by mistake.
+    """
+
+    def test_scorer_uses_raw_score_for_rug_bucket(self):
+        """If anyone changes signal_scorer.py:194 back to plain `score`,
+        this test fires. Lightweight check that doesn't need to spin up
+        the full async pipeline."""
+        from pathlib import Path
+        src = Path(__file__).resolve().parent.parent / "analyzer" / "signal_scorer.py"
+        text = src.read_text(encoding="utf-8")
+
+        # Find the rug_features dict literal.
+        idx = text.find("rug_features = {")
+        assert idx != -1, "rug_features assignment moved — update this test"
+        # Read ~250 chars after — covers the dict literal.
+        snippet = text[idx:idx + 260]
+        assert 'token["raw_score"]' in snippet, (
+            "rug_memory lookup must use token['raw_score'], not the local "
+            "`score` (which is post-fusion). See cf89f61 contract."
+        )

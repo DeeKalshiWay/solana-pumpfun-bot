@@ -169,3 +169,79 @@ class TestVolumeMetric:
 
     def test_whale_buy_volume_empty_for_unknown_mint(self, wt):
         assert wt.whale_buy_volume("Mnone") == 0
+
+
+class TestOutOfOrderWSEvents:
+    """Buy events that arrive BEFORE the matching create are buffered
+    and replayed when create finally lands. Without this, ~5-10% of
+    early whale buys on volatile launches were silently dropped."""
+
+    def test_buy_before_create_replays_on_create(self, wt):
+        """Whale's buy arrives 0.3s before create. On create the buyer
+        must show up in whale_buyers_in_window."""
+        big = WHALE_MIN_AVG_TRADE_SOL + 1.0
+        # Pre-classify the buyer as a whale via earlier mint activity.
+        wt._on_create({"mint": "M_prior"})
+        wt._on_trade(_trade("AddrW", "M_prior", big))
+        assert wt.is_whale("AddrW") is True
+
+        # Now: buy arrives on a NEW mint before its create event.
+        wt._on_trade(_trade("AddrW", "M_late", big))
+        # No buyers recorded yet — mint hasn't been created.
+        assert wt.whale_buyers_in_window("M_late") == []
+
+        # Create arrives → pending buy gets replayed into the window.
+        wt._on_create({"mint": "M_late"})
+        assert "AddrW" in wt.whale_buyers_in_window("M_late")
+
+    def test_buy_too_far_before_create_dropped(self, wt, monkeypatch):
+        """If create lands more than WHALE_PENDING_GRACE_S after the buy,
+        the buy is too old to count — drop it conservatively."""
+        from detector import whale_tracker as wt_mod
+        monkeypatch.setattr(wt_mod, "WHALE_PENDING_GRACE_S", 0.05)
+
+        big = WHALE_MIN_AVG_TRADE_SOL + 1.0
+        wt._on_create({"mint": "M_prior"})
+        wt._on_trade(_trade("AddrW", "M_prior", big))   # classify as whale
+
+        wt._on_trade(_trade("AddrW", "M_late", big))   # buy with no create
+        time.sleep(0.1)                                # grace expires
+        wt._on_create({"mint": "M_late"})
+        # The pending buy expired before create arrived.
+        assert wt.whale_buyers_in_window("M_late") == []
+
+    def test_non_whale_buy_before_create_not_buffered(self, wt):
+        """Pending buffer only holds buys from already-classified whales —
+        pleb buys with no signal aren't worth the memory."""
+        wt._on_trade(_trade("AddrPleb", "M_late", 0.05))   # tiny buy
+        wt._on_create({"mint": "M_late"})
+        assert wt.whale_buyers_in_window("M_late") == []
+        # And the pending buffer should be empty (or contain no entry for M_late)
+        assert wt._pending_buys.get("M_late") in (None, [])
+
+
+class TestLRUPinsWhales:
+    """A classified whale that goes dormant must NOT be evicted while
+    noise wallets cycle through the cap. Without this, dormant whales
+    re-enter as fresh wallets and lose their classification."""
+
+    def test_dormant_whale_survives_eviction_storm(self, tmp_path, monkeypatch):
+        from detector import whale_tracker as wt_mod
+        monkeypatch.setattr(wt_mod, "WHALE_STATE_FILE",   str(tmp_path / "w.json"))
+        monkeypatch.setattr(wt_mod, "MAX_TRACKED_WALLETS", 5)
+        wt = WhaleTracker()
+        wt._on_create({"mint": "M1"})
+
+        # Classify a whale via large lifetime volume
+        for _ in range(50):
+            wt._on_trade(_trade("AddrWhale", "M1", 0.30))   # 15 SOL lifetime
+        assert wt.is_whale("AddrWhale") is True
+
+        # Pump 100 noise wallets through the cap — older non-whales
+        # should evict but the whale survives.
+        for i in range(100):
+            wt._on_trade(_trade(f"AddrNoise{i}", "M1", 0.01))
+
+        assert wt.is_whale("AddrWhale") is True, \
+            "Dormant whale was evicted during a noise-wallet eviction storm"
+        assert len(wt._wallets) <= 5
