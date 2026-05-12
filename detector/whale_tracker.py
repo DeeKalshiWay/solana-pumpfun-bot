@@ -65,8 +65,11 @@ class WhaleTracker:
     def __init__(self):
         # addr -> dict(buys_sol, sells_sol, trade_count, first_seen, last_seen)
         self._wallets: OrderedDict[str, dict[str, Any]] = OrderedDict()
-        # mint -> list[(addr, ts)] within WHALE_WINDOW_S of mint creation
-        self._mint_buyers: dict[str, list[tuple[str, float]]] = {}
+        # mint -> list[(addr, ts, sol_amount)] within WHALE_WINDOW_S of mint
+        # creation. Same whale can appear multiple times — list is the audit
+        # trail of each whale-buy event. whale_buyers_in_window() dedups at
+        # read time; whale_buy_volume() sums the actual sol_amount.
+        self._mint_buyers: dict[str, list[tuple[str, float, float]]] = {}
         # mint -> create_ts (so we know when the buy window started)
         self._mint_created: dict[str, float] = {}
         # WS messages can arrive out of order on busy networks — buy events
@@ -157,9 +160,9 @@ class WhaleTracker:
                 continue   # too old; drop
             w = self._wallets.get(addr)
             if w and self._is_whale_row(w):
-                buyers = self._mint_buyers.setdefault(mint, [])
-                if not any(a == addr for a, _ in buyers):
-                    buyers.append((addr, ts))
+                # Match _on_trade's shape: (addr, ts, sol_amount). No
+                # write-time dedup — readers handle it.
+                self._mint_buyers.setdefault(mint, []).append((addr, ts, sol_amount))
 
     def _on_trade(self, data: dict) -> None:
         """Hot path: keep it short. Aggregate SOL volume per wallet,
@@ -211,10 +214,13 @@ class WhaleTracker:
             else:
                 in_window = (now - created) <= WHALE_WINDOW_S
                 if in_window and self._is_whale_row(w):
-                    buyers = self._mint_buyers.setdefault(mint, [])
-                    # Dedup per mint — same whale buying twice doesn't double-count.
-                    if not any(a == addr for a, _ in buyers):
-                        buyers.append((addr, now))
+                    # Append every whale-buy event with its actual SOL amount.
+                    # whale_buyers_in_window() dedups for the address-set
+                    # query; whale_buy_volume() sums the amounts. Storing
+                    # both means we don't lose volume signal when the same
+                    # whale buys twice — the prior dedup-at-write threw
+                    # away ~30% of real per-mint volume on busy launches.
+                    self._mint_buyers.setdefault(mint, []).append((addr, now, amount))
 
         # Eviction + throttled save.
         self._writes_since_save += 1
@@ -246,6 +252,23 @@ class WhaleTracker:
             for k, _ in oldest:
                 self._mint_buyers.pop(k, None)
                 self._mint_created.pop(k, None)
+
+        # Age-prune _pending_buys. Without this, a mint whose pre-create
+        # buy never sees a matching create AND never sees a second
+        # pre-create buy keeps its entry forever. On a busy network this
+        # was a slow memory leak. Cheap walk; bounded by len(self._pending_buys).
+        if self._pending_buys:
+            cutoff = now - WHALE_PENDING_GRACE_S
+            stale_mints = []
+            for m, entries in self._pending_buys.items():
+                fresh = [e for e in entries if e[2] >= cutoff]
+                if fresh:
+                    self._pending_buys[m] = fresh
+                else:
+                    stale_mints.append(m)
+            for m in stale_mints:
+                self._pending_buys.pop(m, None)
+
         if self._writes_since_save >= 100:
             self._writes_since_save = 0
             self._save()
@@ -255,32 +278,24 @@ class WhaleTracker:
     def whale_buyers_in_window(self, mint: str) -> list[str]:
         """Whale addresses that bought this mint within WHALE_WINDOW_S of
         its create event. Empty when the mint wasn't tracked or no whale
-        showed up. Order = first-seen ascending."""
+        showed up. Order = first-seen ascending; duplicates collapsed."""
         rows = self._mint_buyers.get(mint, [])
         if not rows:
             return []
-        return [addr for addr, _ in rows]
+        seen: set[str] = set()
+        out: list[str] = []
+        for addr, _, _ in rows:
+            if addr not in seen:
+                seen.add(addr)
+                out.append(addr)
+        return out
 
     def whale_buy_volume(self, mint: str) -> float:
-        """Sum of buy-side SOL across whale wallets in the window. Used by
-        the fusion engine to differentiate 1 whale @ 0.5 SOL from 1 whale
-        @ 5 SOL — both fire whale_confirmed but only one is a real signal."""
-        rows = self._mint_buyers.get(mint, [])
-        if not rows:
-            return 0.0
-        # We don't keep per-mint amount in _mint_buyers (just addr+ts) to
-        # keep the hot path small. Approximate via the wallet's avg trade
-        # size — overcounts when a whale also trades other mints in the
-        # window, but the lower-bound (avg) is good enough for the
-        # fusion gate.
-        total = 0.0
-        for addr, _ in rows:
-            w = self._wallets.get(addr)
-            if not w:
-                continue
-            n = max(int(w.get("trade_count", 1)), 1)
-            total += float(w.get("buys_sol", 0)) / n
-        return total
+        """Sum of SOL each whale actually spent buying this specific mint
+        inside the window. Lets the fusion engine differentiate 1 whale
+        @ 0.5 SOL from 1 whale @ 5 SOL — both fire whale_confirmed but
+        only one is a real signal."""
+        return float(sum(amt for _, _, amt in self._mint_buyers.get(mint, [])))
 
     # ── Diagnostics for the dashboard /api/intel ─────────────────────────────
 

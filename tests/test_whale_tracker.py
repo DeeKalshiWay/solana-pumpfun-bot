@@ -245,3 +245,77 @@ class TestLRUPinsWhales:
         assert wt.is_whale("AddrWhale") is True, \
             "Dormant whale was evicted during a noise-wallet eviction storm"
         assert len(wt._wallets) <= 5
+
+
+class TestWhaleBuyVolumeAccuracy:
+    """Reflects the actual SOL each whale put into THIS mint within
+    the window, not their lifetime-average trade size. The old approx
+    silently under-reported volume for whales whose mint-specific buy
+    was bigger than their typical trade — making the fusion engine
+    miss real-money entries that should have fired whale_confirmed."""
+
+    def test_single_whale_big_one_off_buy(self, wt):
+        """A whale whose lifetime avg is 0.5 SOL but who put 3.0 SOL into
+        this specific mint should report 3.0 — not the avg."""
+        wt._on_create({"mint": "M_warmup"})
+        # Build a lifetime avg of ~0.5 SOL on a DIFFERENT mint.
+        for _ in range(20):
+            wt._on_trade(_trade("AddrW", "M_warmup", 0.5))
+        assert wt.is_whale("AddrW") is True
+
+        # Now the real test: same whale buys 3.0 into a new mint.
+        wt._on_create({"mint": "M_target"})
+        wt._on_trade(_trade("AddrW", "M_target", 3.0))
+        assert wt.whale_buy_volume("M_target") == pytest.approx(3.0)
+
+    def test_same_whale_multiple_buys_sum(self, wt):
+        """Repeat buys from the same whale must accumulate into the
+        per-mint total. The old write-time dedup threw away every buy
+        after the first one."""
+        wt._on_create({"mint": "M1"})
+        big = WHALE_MIN_AVG_TRADE_SOL + 1.0
+        wt._on_trade(_trade("AddrW", "M1", big))
+        wt._on_trade(_trade("AddrW", "M1", 0.5))
+        wt._on_trade(_trade("AddrW", "M1", 0.8))
+        # Three buys of 2.0 + 0.5 + 0.8 = 3.3 SOL
+        assert wt.whale_buy_volume("M1") == pytest.approx(big + 0.5 + 0.8)
+        # Dedup still applies for the buyers list:
+        assert wt.whale_buyers_in_window("M1") == ["AddrW"]
+
+    def test_multiple_whales_each_actual_amount(self, wt):
+        wt._on_create({"mint": "M1"})
+        wt._on_trade(_trade("AddrA", "M1", 2.5))
+        wt._on_trade(_trade("AddrB", "M1", 1.2))
+        # 2.5 + 1.2 = 3.7
+        assert wt.whale_buy_volume("M1") == pytest.approx(3.7)
+        assert set(wt.whale_buyers_in_window("M1")) == {"AddrA", "AddrB"}
+
+
+class TestPendingBuysLeak:
+    """Pending pre-create buys must age out even when the matching
+    create event never arrives and no other pre-create buy comes for
+    the same mint. Without this, _pending_buys grew unbounded on
+    busy networks where create messages occasionally drop."""
+
+    def test_orphan_pending_pruned_after_grace(self, wt, monkeypatch):
+        from detector import whale_tracker as wt_mod
+        monkeypatch.setattr(wt_mod, "WHALE_PENDING_GRACE_S", 0.05)
+
+        big = WHALE_MIN_AVG_TRADE_SOL + 1.0
+        wt._on_create({"mint": "M_prior"})
+        wt._on_trade(_trade("AddrW", "M_prior", big))   # classify
+
+        # Buy lands on M_orphan with no create event ever to come.
+        wt._on_trade(_trade("AddrW", "M_orphan", big))
+        assert "M_orphan" in wt._pending_buys
+
+        # Sleep past the grace window.
+        time.sleep(0.1)
+
+        # Driving any unrelated trade should trigger the periodic
+        # pending-buys age sweep in the eviction block.
+        wt._on_create({"mint": "M_other"})
+        wt._on_trade(_trade("AddrW", "M_other", big))
+
+        # The orphan entry is gone.
+        assert "M_orphan" not in wt._pending_buys
