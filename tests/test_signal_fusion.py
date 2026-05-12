@@ -19,6 +19,8 @@ def _base(**overrides) -> dict:
     to exercise one pattern at a time."""
     t = {
         "smart_buyer_count":      0,
+        "whale_buyer_count":      0,
+        "whale_buy_volume":       0.0,
         "influencer_mention":     False,
         "x_hype_match":           False,
         "pf_comment_velocity":    0,
@@ -135,6 +137,44 @@ class TestPrimeMcSmart:
     def test_no_smart_misses(self):
         fired = detect_patterns(_base(market_cap_sol=40, smart_buyer_count=0))
         assert "prime_mc_smart" not in fired
+
+
+class TestWhaleConfirmed:
+    """Whale (volume-classified) buyer + corroboration. Whales alone
+    aren't enough — a single rich noob is too easy to fake — but
+    whale + smart wallet OR whale + dominant buy tape is the conjunction
+    the pattern catches."""
+
+    def test_whale_alone_does_not_fire(self):
+        fired = detect_patterns(_base(whale_buyer_count=1))
+        assert "whale_confirmed" not in fired
+
+    def test_whale_plus_smart_fires(self):
+        fired = detect_patterns(_base(whale_buyer_count=1, smart_buyer_count=1))
+        assert "whale_confirmed" in fired
+
+    def test_whale_plus_dominant_buy_tape_fires(self):
+        fired = detect_patterns(_base(
+            whale_buyer_count=1, buys_5m=8, sells_5m=2,   # 80% buy ratio
+        ))
+        assert "whale_confirmed" in fired
+
+    def test_whale_volume_threshold_alone_qualifies_as_whale_side(self):
+        """Volume gate (≥2 SOL) substitutes for whale_count — useful when
+        the count is zero but a single ticker-by-ticker query is at the
+        edge of classification."""
+        fired = detect_patterns(_base(
+            whale_buyer_count=0, whale_buy_volume=2.5, smart_buyer_count=1,
+        ))
+        assert "whale_confirmed" in fired
+
+    def test_weak_corroboration_kills_it(self):
+        """Whale + flat tape + no smart = no fire."""
+        fired = detect_patterns(_base(
+            whale_buyer_count=1, smart_buyer_count=0,
+            buys_5m=2, sells_5m=2,   # 50% buy ratio, below 65% threshold
+        ))
+        assert "whale_confirmed" not in fired
 
 
 class TestNegativeAlignments:

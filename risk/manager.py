@@ -60,9 +60,23 @@ from detector.wallet_intel import wallet_intel
 from logger.telegram_alerts import send_alert
 from logger.trade_db import get_trade_db
 
-CLOSED_TRADES_FILE = "logs/closed_trades.jsonl"
-RISK_STATE_FILE    = "logs/risk_state.json"
+CLOSED_TRADES_FILE   = "logs/closed_trades.jsonl"
+RISK_STATE_FILE      = "logs/risk_state.json"
 SYMBOL_DEPLOYED_FILE = "logs/symbol_deployed.json"
+OPEN_POSITIONS_FILE  = "logs/open_positions.json"
+
+# Force-sell escalation. If a position fails to close after this many
+# attempts the bot logs CRITICAL and drops it from self.positions so the
+# emergency_force_sell loop isn't permanently stuck retrying the same
+# zombie mint. Tokens may still be sitting in the wallet — recover via
+# dump_orphans.py.
+MAX_FORCE_SELL_ATTEMPTS = 10
+
+# Held-position market-value calc treats a position as worth 0 if its
+# current_price hasn't been refreshed within this many seconds. Without
+# this guard a stale price (price_monitor lag) inflates equity during
+# rapid drops and the emergency drawdown trigger fires late.
+STALE_PRICE_SEC = 10.0
 
 
 @dataclass
@@ -96,6 +110,14 @@ class Position:
     prebuilt_sell_ts:    float = 0
     # Rolling (timestamp, pnl_pct) tuples for momentum-stall detection.
     price_history:   list  = field(default_factory=list)
+    # Last time current_price was refreshed. Used by _check_emergency_stop
+    # to ignore stale prices in the held-value calc so the drawdown
+    # trigger isn't fooled by lagged price ticks during a fast dump.
+    price_updated_at:    float = 0
+    # Count of force-sell attempts on this mint. Reset to 0 on every
+    # successful state change. After MAX_FORCE_SELL_ATTEMPTS the position
+    # is logged CRITICAL and dropped — see _force_sell.
+    force_sell_attempts: int   = 0
 
     @property
     def pnl_pct(self) -> float:
@@ -145,6 +167,11 @@ class RiskManager:
         # Load historical closed trades from JSONL so the dashboard doesn't
         # forget what's happened across bot restarts.
         self._load_closed_trades()
+
+        # Restore any open positions that were in-flight when the bot last
+        # exited. Without this a crash silently loses every open position
+        # — SPL tokens stay in the wallet but the bot can't TP/stop them.
+        self._load_open_positions()
 
         # Restore the ORIGINAL starting balance — the very first balance
         # we ever recorded on this bot install. Without this, every restart
@@ -250,23 +277,144 @@ class RiskManager:
         First time we run, persist the current balance as the original
         starting capital. Every subsequent run, load that same value so PnL
         is measured against the bot's original seed, not whatever's left.
+
+        Also loads emergency flags so a process restart doesn't wipe an
+        active emergency-stop state. Without this, the 40% drawdown
+        trigger reset to inactive on every restart and the bot resumed
+        trading at the depleted balance — the single biggest factor in
+        the −99.85% live wipeout.
         """
         try:
             if os.path.exists(RISK_STATE_FILE):
                 with open(RISK_STATE_FILE, encoding="utf-8") as f:
                     data = json.load(f)
                 v = float(data.get("original_starting_sol", current_balance))
+                # Rehydrate emergency state. New keys; older files silently
+                # default to False (safe — at worst we miss one trigger
+                # and the drawdown check will re-arm on the next tick).
+                self.emergency_stop_active = bool(data.get("emergency_stop_active", False))
+                self.emergency_force_sell  = bool(data.get("emergency_force_sell",  False))
+                if self.emergency_stop_active:
+                    logger.warning(
+                        "[RISK] Resuming with persisted emergency_stop_active=True. "
+                        "Clear via the dashboard 'Resume Trading' button if intentional."
+                    )
                 if v > 0:
                     return v
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"[RISK] state load error ({e}); seeding fresh")
         # Seed it
         try:
-            with open(RISK_STATE_FILE, "w", encoding="utf-8") as f:
-                json.dump({"original_starting_sol": current_balance}, f, indent=2)
+            self._save_risk_state(starting_sol=current_balance)
         except Exception as e:
             logger.warning(f"[RISK] Could not seed starting balance: {e}")
         return current_balance
+
+    # ── Open-position persistence ────────────────────────────────────────
+    # Without this a crash mid-run silently loses every open position —
+    # SPL tokens remain in the wallet but the bot doesn't know they're
+    # there, so no force-sell, no TP, no stop. dump_orphans.py was the
+    # documented manual recovery, which is too slow during a fast dump.
+    def _save_open_positions(self) -> None:
+        """Atomic JSON dump of every currently-open position. Called
+        from open_position, close_position, _record_partial_close, and
+        _force_sell so disk state never drifts more than one mutation.
+        prebuilt_sell_tx (bytes) is intentionally excluded — it's
+        cheap to rebuild and bytes-in-JSON would need encoding."""
+        rows = []
+        for mint, pos in self.positions.items():
+            rows.append({
+                "mint":              mint,
+                "symbol":            pos.symbol,
+                "creator":           pos.creator,
+                "entry_price_sol":   pos.entry_price_sol,
+                "entry_time":        pos.entry_time,
+                "sol_invested":      pos.sol_invested,
+                "tokens_held":       pos.tokens_held,
+                "current_price":     pos.current_price,
+                "highest_price":     pos.highest_price,
+                "tp_levels_hit":     list(pos.tp_levels_hit),
+                "score":             pos.score,
+                "raw_score":         pos.raw_score,
+                "init_buy_sol":      pos.init_buy_sol,
+                "bonding_curve_pct": pos.bonding_curve_pct,
+                "price_updated_at":  pos.price_updated_at,
+                "force_sell_attempts": pos.force_sell_attempts,
+            })
+        tmp = OPEN_POSITIONS_FILE + ".tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump({"positions": rows, "saved_at": time.time()}, f, indent=2)
+            os.replace(tmp, OPEN_POSITIONS_FILE)
+        except Exception as e:
+            logger.warning(f"[RISK] open-positions save failed: {e}")
+
+    def _load_open_positions(self) -> None:
+        """Restore open positions from disk on startup. Reconciliation
+        against on-chain ATA balances is deferred — at worst the bot
+        believes it owns tokens it sold while down, and will get a
+        clean error from PumpPortal on the next force-sell attempt."""
+        if not os.path.exists(OPEN_POSITIONS_FILE):
+            return
+        try:
+            with open(OPEN_POSITIONS_FILE, encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception as e:
+            logger.warning(f"[RISK] open-positions load failed: {e}")
+            return
+        rows = data.get("positions", []) if isinstance(data, dict) else []
+        restored = 0
+        for row in rows:
+            try:
+                mint = row["mint"]
+                self.positions[mint] = Position(
+                    mint              = mint,
+                    symbol            = row.get("symbol", "???"),
+                    creator           = row.get("creator", ""),
+                    entry_price_sol   = float(row.get("entry_price_sol", 0)),
+                    entry_time        = float(row.get("entry_time", time.time())),
+                    sol_invested      = float(row.get("sol_invested", 0)),
+                    tokens_held       = int(row.get("tokens_held", 0)),
+                    current_price     = float(row.get("current_price", 0)),
+                    highest_price     = float(row.get("highest_price", 0)),
+                    tp_levels_hit     = list(row.get("tp_levels_hit", [])),
+                    score             = int(row.get("score", 0)),
+                    raw_score         = int(row.get("raw_score", 0)),
+                    init_buy_sol      = float(row.get("init_buy_sol", 0)),
+                    bonding_curve_pct = float(row.get("bonding_curve_pct", 0)),
+                    price_updated_at  = float(row.get("price_updated_at", 0)),
+                    force_sell_attempts = int(row.get("force_sell_attempts", 0)),
+                )
+                restored += 1
+            except Exception as e:
+                logger.warning(f"[RISK] skipping malformed position row: {e}")
+        if restored:
+            logger.warning(
+                f"[RISK] Restored {restored} open position(s) from disk. "
+                "Verify wallet ATA balances match (dump_orphans.py)."
+            )
+
+    def _save_risk_state(self, starting_sol: float | None = None) -> None:
+        """Atomic write of the full risk-state snapshot.
+
+        Saves: original starting balance, emergency flags. Called on every
+        emergency-flag transition so a crash mid-emergency doesn't let
+        the bot resume trading on restart.
+        """
+        payload = {
+            "original_starting_sol": starting_sol if starting_sol is not None
+                                     else float(self.starting_sol_balance or 0),
+            "emergency_stop_active": bool(self.emergency_stop_active),
+            "emergency_force_sell":  bool(self.emergency_force_sell),
+            "saved_at":              time.time(),
+        }
+        tmp = RISK_STATE_FILE + ".tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(payload, f, indent=2)
+            os.replace(tmp, RISK_STATE_FILE)
+        except Exception as e:
+            logger.warning(f"[RISK] state save failed: {e}")
 
     # ── Tier 2: pause guards ──────────────────────────────────────────────────
     async def _is_paused(self) -> bool:
@@ -282,13 +430,32 @@ class RiskManager:
         # Daily baseline reset on UTC date change. Baseline is total EQUITY
         # (liquid SOL + market value of any positions held over midnight) so
         # we can compare like-to-like to current equity below.
+        #
+        # IMPORTANT: don't reset if we're underwater against the prior
+        # baseline. Without this guard, a drawdown that straddles UTC
+        # midnight silently rebases the daily-loss circuit breaker to the
+        # post-crash equity — the bot gets a clean slate to lose another
+        # DAILY_LOSS_LIMIT_PCT% in the new day. Live wipeouts confirmed
+        # this was happening. Keep the old baseline until equity recovers
+        # above 80% of it.
         today = datetime.datetime.now(datetime.UTC).date()
         if self.day_baseline_date != today:
             sol = await self.wallet.get_sol_balance()
             held = sum(p.current_price * p.tokens_held for p in self.positions.values())
-            self.day_baseline_balance = sol + held
-            self.day_baseline_date    = today
-            self.day_paused           = False
+            new_baseline = sol + held
+            if self.day_baseline_balance > 0 and new_baseline < self.day_baseline_balance * 0.80:
+                logger.warning(
+                    f"[RISK] UTC midnight rolled but equity {new_baseline:.4f} is "
+                    f"<80% of prior baseline {self.day_baseline_balance:.4f}; "
+                    "preserving baseline so the daily-loss breaker stays armed."
+                )
+                # keep old day_baseline_balance; still bump the date so
+                # we don't re-evaluate every loop iteration.
+                self.day_baseline_date = today
+            else:
+                self.day_baseline_balance = new_baseline
+                self.day_baseline_date    = today
+                self.day_paused           = False
 
         # Daily PnL bands — measure on total equity, not liquid SOL alone.
         # Otherwise opening a position registers as an immediate "loss" because
@@ -410,6 +577,7 @@ class RiskManager:
         )
 
         self.positions[mint] = pos
+        self._save_open_positions()
 
         # Record lifetime deploy under this symbol for the concentration cap.
         # Symbol-keyed, not mint-keyed: a creator relaunching the same name
@@ -424,10 +592,64 @@ class RiskManager:
         )
 
     # ── Close position ────────────────────────────────────────────────────────
+    def _record_partial_close(
+        self,
+        mint: str,
+        pos: "Position",
+        sell_fraction: float,
+        sell_result: dict,
+        level_id: str,
+    ) -> None:
+        """Write a take-profit partial sell to closed_trades + trade_db.
+
+        Treats each TP leg as its own trade record so the auto_tuner,
+        rug_memory, and dashboard reflect the SOL the wallet actually
+        received — not just the final exit. The cost basis for the partial
+        is the pre-decrement sol_invested × sell_fraction.
+
+        Position is NOT popped; the caller still owns the residual.
+        """
+        partial_invested = pos.sol_invested * sell_fraction
+        sol_received     = float(sell_result.get("sol_received", 0) or 0)
+        pnl_sol          = sol_received - partial_invested
+
+        trade_record = {
+            "mint":         mint,
+            "symbol":       pos.symbol,
+            "creator":      pos.creator,
+            "entry_time":   pos.entry_time,
+            "exit_time":    time.time(),
+            "sol_invested": partial_invested,
+            "sol_received": sol_received,
+            "pnl_sol":      pnl_sol,
+            "pnl_pct":      pos.pnl_pct,         # at the moment of TP
+            "hold_minutes": pos.age_minutes,
+            "reason":       sell_result.get("reason", level_id),
+            "score":        pos.score,
+            "partial":      True,                # marker for downstream filtering
+            "sol_received_optimistic": sell_result.get("sol_received_optimistic"),
+            "exit_latency_s":          sell_result.get("exit_latency_s"),
+        }
+        self.closed_trades.append(trade_record)
+        self._append_closed_trade(trade_record)
+
+        # Feed the partial gain to the creator tracker too — successful TPs
+        # are useful signal for the creator leaderboard.
+        if pos.creator:
+            creator_tracker.record_trade_result(pos.creator, pnl_sol)
+
+        sign = "+" if pnl_sol >= 0 else ""
+        logger.success(
+            f"[TP PARTIAL CLOSED] {pos.symbol} | leg={level_id} | "
+            f"invested={partial_invested:.4f} → received={sol_received:.4f} | "
+            f"PnL {sign}{pnl_sol:.4f} SOL"
+        )
+
     def close_position(self, mint: str, sell_result: dict):
         pos = self.positions.pop(mint, None)
         if not pos:
             return
+        self._save_open_positions()   # disk no longer lists this mint
 
         pnl_sol = sell_result.get("sol_received", 0) - pos.sol_invested
 
@@ -525,6 +747,7 @@ class RiskManager:
         if not pos:
             return
         pos.current_price = current_price_sol
+        pos.price_updated_at = time.time()
         if current_price_sol > pos.highest_price:
             pos.highest_price = current_price_sol
 
@@ -552,15 +775,32 @@ class RiskManager:
                 logger.error(f"Risk monitor error: {e}")
             await asyncio.sleep(3)
 
+    def _held_value_for_drawdown(self) -> float:
+        """Sum of market value of open positions, BUT positions whose
+        price hasn't been refreshed within STALE_PRICE_SEC are treated
+        as worth 0 in the equity calc. Conservative: a stale price
+        during a fast dump inflates equity, making drawdown look smaller
+        and delaying the emergency trigger. Better to fire slightly
+        early on stale data than miss a real drawdown."""
+        now   = time.time()
+        total = 0.0
+        for p in self.positions.values():
+            age = now - p.price_updated_at if p.price_updated_at else None
+            if age is None or age > STALE_PRICE_SEC:
+                continue   # treat as 0
+            total += p.current_price * p.tokens_held
+        return total
+
     async def _check_emergency_stop(self):
         if self.starting_sol_balance == 0:
             return
 
         # Drawdown is on TOTAL EQUITY (liquid SOL + open position market value),
         # not liquid SOL alone — otherwise a healthy 0.4 SOL position looks like
-        # a 40% loss the moment it's opened.
+        # a 40% loss the moment it's opened. Stale-price positions are
+        # excluded conservatively (see _held_value_for_drawdown).
         current_sol = await self.wallet.get_sol_balance()
-        held_value  = sum(p.current_price * p.tokens_held for p in self.positions.values())
+        held_value  = self._held_value_for_drawdown()
         total_equity = current_sol + held_value
         drawdown = ((self.starting_sol_balance - total_equity) / self.starting_sol_balance) * 100
 
@@ -575,6 +815,7 @@ class RiskManager:
         if drawdown >= EMERGENCY_STOP_DRAWDOWN_PCT:
             self.emergency_stop_active = True
             self.emergency_force_sell  = True
+            self._save_risk_state()    # persist so a restart doesn't wipe this
             logger.critical(
                 f"EMERGENCY STOP TRIGGERED | Drawdown: {drawdown:.1f}% | "
                 f"Equity: {total_equity:.4f} SOL (liquid {current_sol:.4f} + held {held_value:.4f})"
@@ -673,11 +914,24 @@ class RiskManager:
                     )
                     continue  # don't mark level hit; retry on the next monitor pass
 
+                # Record the partial as its own trade BEFORE the cost-basis
+                # decrement, so closed_trades reflects the SOL the wallet
+                # actually received from this leg. Previously TPs were only
+                # locally accounted (pos.sol_invested *= 0.85) and never
+                # written to trades.db — the auto_tuner saw only final
+                # exits per position, which systematically undercounted
+                # wins. Skip the partial record on the final leg (handled
+                # by close_position below) to avoid double-counting.
+                final_leg = int(pos.tokens_held * (1 - sell_fraction)) <= 0
+                if not final_leg:
+                    self._record_partial_close(mint, pos, sell_fraction, result, level_id)
+
                 # Local accounting: PumpPortal sold sell_fraction of the ATA balance,
                 # so reduce our tracked tokens_held + cost basis by the same fraction.
                 pos.tokens_held  = int(pos.tokens_held * (1 - sell_fraction))
                 pos.sol_invested *= (1 - sell_fraction)
                 pos.tp_levels_hit.append(level_id)
+                self._save_open_positions()   # disk reflects post-TP state
 
                 if pos.tokens_held <= 0:
                     self.close_position(mint, result)
@@ -758,9 +1012,28 @@ class RiskManager:
         )
 
         if not result.get("success"):
+            pos.force_sell_attempts += 1
+            self._save_open_positions()
+            err = result.get("error", "unknown")
+            if pos.force_sell_attempts >= MAX_FORCE_SELL_ATTEMPTS:
+                # The mint is almost certainly dead (no liquidity / paused
+                # pool). Drop it from self.positions so the emergency loop
+                # isn't permanently stuck retrying this one zombie and
+                # burning the buy-side priority fee floor on every tick.
+                # Tokens may still be in the wallet — recover via
+                # dump_orphans.py once liquidity returns.
+                logger.critical(
+                    f"[FORCE SELL ABANDONED] {pos.symbol} ({mint[:8]}) | "
+                    f"{pos.force_sell_attempts} attempts failed; last error={err} | "
+                    f"DROPPING from positions. Use dump_orphans.py to recover tokens."
+                )
+                self.positions.pop(mint, None)
+                self._save_open_positions()
+                return
             logger.warning(
                 f"[FORCE SELL FAILED] {pos.symbol} ({mint[:8]}) | reason={reason} | "
-                f"error={result.get('error', 'unknown')} | leaving position open for retry"
+                f"attempt {pos.force_sell_attempts}/{MAX_FORCE_SELL_ATTEMPTS} | "
+                f"error={err} | leaving position open for retry"
             )
             return
 
