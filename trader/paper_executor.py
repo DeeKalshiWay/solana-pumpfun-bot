@@ -193,6 +193,11 @@ class PaperExecutor:
         self._curve_sol: dict = {}           # mint -> bonding curve size at entry
         # Pre-deducted entry slippage stored for the matching exit
         self._entry_slippage_taken: dict = {}
+        # Tokens held per mint. Live mode reads ATA balance from chain; paper
+        # mode has to track it locally because risk_manager passes percent
+        # strings ("15%", "100%") to sell() and we need a real count to
+        # resolve them against.
+        self._tokens_held: dict[str, int] = {}
 
     async def start(self):
         if REALISTIC_PAPER_SIM:
@@ -269,6 +274,7 @@ class PaperExecutor:
         self._prices[token_mint]      = price_per_raw
         self._curve_sol[token_mint]   = curve_sol
         self._entry_slippage_taken[token_mint] = total_drag
+        self._tokens_held[token_mint] = tokens_received
         self.wallet.deduct(sol_amount)
 
         logger.success(
@@ -292,22 +298,51 @@ class PaperExecutor:
         prebuild fast-path doesn't AttributeError when paper mode is on."""
         return None
 
+    def _resolve_token_amount(self, token_mint: str, raw) -> int:
+        """Resolve the sell amount risk_manager passed into a concrete int.
+        risk_manager hands us either an int (legacy) or a percent string
+        ("15%", "100%") that mirrors what live PumpPortal accepts. Paper
+        has no chain to look up the ATA balance against, so we resolve
+        the percent against our own _tokens_held bookkeeping.
+        """
+        held = self._tokens_held.get(token_mint, 0)
+        if isinstance(raw, str):
+            s = raw.strip()
+            if s.endswith("%"):
+                try:
+                    pct = float(s[:-1])
+                except ValueError:
+                    return 0
+                return max(0, int(held * (pct / 100.0)))
+            try:
+                return max(0, int(float(s)))
+            except ValueError:
+                return 0
+        try:
+            return max(0, int(raw))
+        except (TypeError, ValueError):
+            return 0
+
     # ── SELL ──────────────────────────────────────────────────────────────────
-    async def sell(self, token_mint: str, token_amount_raw, reason: str = "exit",
+    async def sell(self, token_mint: str, token_amount, reason: str = "exit",
                    prebuilt_tx: bytes | None = None,
                    price_history: list | None = None) -> dict:
         # prebuilt_tx is ignored in paper mode (no real tx). Param exists so
         # the kwarg from risk_manager._force_sell doesn't crash.
         # price_history is consumed only on stall-class exits (see below).
 
+        # Resolve "X%" strings against tracked holdings BEFORE anything else
+        # — risk_manager passes "15%" / "50%" / "100%" for TP partials and
+        # full force-sells. Without resolution, paper exits silently returned
+        # sol_received=0 and every partial recorded as a 100% loss of cost
+        # basis regardless of the price move.
+        token_amount = self._resolve_token_amount(token_mint, token_amount)
+
         # Sell-side priority fee, scaled to the position's notional value.
         # In live this caps at 5x the buy cap because exit urgency on a rug
         # pays for itself — paper now models the same asymmetry.
         price_now_for_fee = self._prices.get(token_mint, 0)
-        if isinstance(token_amount_raw, str) and "%" in token_amount_raw:
-            pos_value = 0.0   # full %-exit; will resolve below, fee uses 0 (small-fallback)
-        else:
-            pos_value = float(token_amount_raw) * price_now_for_fee
+        pos_value = token_amount * price_now_for_fee
         sell_fee = _sell_priority_fee(pos_value)
         self.wallet.deduct(sell_fee)
 
@@ -330,10 +365,7 @@ class PaperExecutor:
         price_now = self._prices.get(token_mint, 0)
         curve_sol = self._curve_sol.get(token_mint, DEFAULT_CURVE_SOL)
 
-        if isinstance(token_amount_raw, str) and "%" in token_amount_raw:
-            token_amount_raw = 0
-
-        if price_now <= 0 or not (isinstance(token_amount_raw, int) and token_amount_raw > 0):
+        if price_now <= 0 or token_amount <= 0:
             logger.warning(f"[PAPER SELL 0FILL] {token_mint[:8]} | no price/amount")
             return {
                 "success":      True, "venue": "paper", "type": "sell",
@@ -361,8 +393,8 @@ class PaperExecutor:
             exec_price = price_now
             stampede_mult = 1.0
 
-        gross_sol            = token_amount_raw * exec_price
-        gross_sol_optimistic = token_amount_raw * price_now
+        gross_sol            = token_amount * exec_price
+        gross_sol_optimistic = token_amount * price_now
 
         # Apply size-dependent slippage on the way out too. Clamp total drag
         # to <=0.95 — without this, very large exits (or stampede-multiplied
@@ -388,7 +420,7 @@ class PaperExecutor:
         if is_stampede:
             logger.success(
                 f"[PAPER SELL/STAMPEDE] {token_mint[:8]} | reason={reason} | "
-                f"{token_amount_raw:,} tokens -> {sol_received:.4f} SOL "
+                f"{token_amount:,} tokens -> {sol_received:.4f} SOL "
                 f"(was {sol_received_optim:.4f} pre-latency) | "
                 f"slip {slip_base*100:.1f}%×{stampede_mult:.1f}={slip*100:.1f}% "
                 f"mev={mev*100:.1f}% lat={latency_s:.2f}s"
@@ -396,13 +428,20 @@ class PaperExecutor:
         else:
             logger.success(
                 f"[PAPER SELL] {token_mint[:8]} | reason={reason} | "
-                f"{token_amount_raw:,} tokens -> {sol_received:.4f} SOL "
+                f"{token_amount:,} tokens -> {sol_received:.4f} SOL "
                 f"(slip={slip*100:.1f}% mev={mev*100:.1f}% fee={sell_fee:.4f}"
                 f"{' +late' if late_tp_penalty else ''})"
             )
 
-        # Cleanup entry tracking
-        self._entry_slippage_taken.pop(token_mint, None)
+        # Decrement local holdings so the next partial resolves against the
+        # remaining tokens, not the original entry. On a 100% leg this drains
+        # to 0 and the entry is fully cleared.
+        remaining = max(0, self._tokens_held.get(token_mint, 0) - token_amount)
+        if remaining > 0:
+            self._tokens_held[token_mint] = remaining
+        else:
+            self._tokens_held.pop(token_mint, None)
+            self._entry_slippage_taken.pop(token_mint, None)
 
         return {
             "success":               True,
