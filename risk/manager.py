@@ -478,18 +478,29 @@ class RiskManager:
         return False
 
     # ── Position sizing ───────────────────────────────────────────────────────
-    async def calculate_position_size(self, score: int, symbol: str | None = None) -> float:
+    async def calculate_position_size(
+        self, score: int, symbol: str | None = None,
+    ) -> tuple[float, str]:
+        """Return (size_sol, reject_reason).
+
+        On success, reject_reason is "". On rejection, size is 0 and the
+        reason is a stable token the dashboard can group on:
+          emergency_stop, paused_<sub>, max_positions, symbol_cap,
+          max_exposure, size_below_min.
+        """
         if self.emergency_stop_active:
             logger.warning("Emergency stop active — no new positions")
-            return 0
+            return 0.0, "emergency_stop"
 
         if await self._is_paused():
             logger.warning(f"Trading paused: {self.pause_reason}")
-            return 0
+            # pause_reason already disambiguates loss_streak / daily_loss /
+            # daily_profit_lock — prefix it so the dashboard can split.
+            return 0.0, f"paused_{self.pause_reason}" if self.pause_reason else "paused"
 
         if len(self.positions) >= MAX_OPEN_POSITIONS:
             logger.warning(f"Max positions reached ({MAX_OPEN_POSITIONS})")
-            return 0
+            return 0.0, "max_positions"
 
         # Per-symbol lifetime cap (concentration audit fix). Optional symbol
         # arg keeps backward-compat — callers that don't pass it skip the check.
@@ -499,12 +510,12 @@ class RiskManager:
                 f"[SYMBOL CAP] {symbol} | lifetime deploy {already:.4f} SOL "
                 f">= cap {self._symbol_cap_sol():.4f} ({MAX_SYMBOL_LIFETIME_DEPLOY_PCT}% of start) — no new buy"
             )
-            return 0
+            return 0.0, "symbol_cap"
 
         total_exposure = sum(p.sol_invested for p in self.positions.values())
         if total_exposure >= MAX_TOTAL_EXPOSURE_SOL:
             logger.warning(f"Max exposure reached ({total_exposure:.3f} SOL)")
-            return 0
+            return 0.0, "max_exposure"
 
         sol_balance = await self.wallet.get_sol_balance()
         base_size   = min(MAX_SOL_PER_TRADE, sol_balance * MAX_POSITION_PCT)
@@ -538,13 +549,13 @@ class RiskManager:
         # Minimum viable trade — covers fees + slippage with room to profit.
         min_viable = min(MAX_SOL_PER_TRADE / 2, 0.003)
         if size < min_viable:
-            return 0
+            return 0.0, "size_below_min"
 
         logger.info(
             f"Position size: {size:.4f} SOL "
             f"(score={score}, mult={multiplier:.2f} {adaptive_note}, balance={sol_balance:.4f})"
         )
-        return round(size, 4)
+        return round(size, 4), ""
 
     # ── Open position ─────────────────────────────────────────────────────────
     def open_position(self, token: dict, trade_result: dict):
