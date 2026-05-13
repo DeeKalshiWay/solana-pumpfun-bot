@@ -151,7 +151,7 @@ class Dashboard:
         table.add_column("Score",    width=6)
         table.add_column("MC SOL",   width=8)
         table.add_column("Init Buy", width=8)
-        table.add_column("Result",   width=14)
+        table.add_column("Result",   width=22)
 
         for token in self.recent_signals[:12]:
             score  = token.get("score", 0)
@@ -159,7 +159,7 @@ class Dashboard:
             if token.get("queued_for_buy"):
                 result = "[green]BUY SENT[/green]"
             elif token.get("reject_reason"):
-                result = f"[red]{str(token['reject_reason'])[:12]}[/red]"
+                result = f"[red]{str(token['reject_reason'])[:20]}[/red]"
             else:
                 result = "[dim]pending[/dim]"
 

@@ -145,9 +145,12 @@ async def trade_loop(trade_queue, executor, risk_manager, dashboard, wallet):
             dashboard.record_signal(token)
             continue
 
-        sol_amount = await risk_manager.calculate_position_size(score, symbol=symbol)
+        sol_amount, reject_reason = await risk_manager.calculate_position_size(score, symbol=symbol)
         if sol_amount <= 0:
-            token["reject_reason"] = "no_capacity"
+            # reject_reason is one of: emergency_stop, paused_<sub>,
+            # max_positions, symbol_cap, max_exposure, size_below_min.
+            # Falls back to "no_capacity" if the sizer surfaced none (defensive).
+            token["reject_reason"] = reject_reason or "no_capacity"
             dashboard.record_signal(token)
             continue
 
