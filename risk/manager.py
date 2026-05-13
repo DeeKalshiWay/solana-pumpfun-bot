@@ -753,10 +753,40 @@ class RiskManager:
         )
 
     # ── Price update ──────────────────────────────────────────────────────────
+    # Price-sanity guard. Bonding-curve mints can't move more than ~3× before
+    # they migrate to Raydium at 85 SOL — and even post-migration a single-tick
+    # >5× spike is almost always a garbage quote (Jupiter / DexScreener
+    # returning a corrupted price from a thin, manipulated, or freshly-
+    # migrated pool). Observed live: a 0.05 SOL position recorded +30,000% PnL
+    # on a single tick because the fallback feed quoted a 300× price for a
+    # ??? metadata-less mint. The wallet math was honest; the input was junk.
+    #
+    # We only filter spikes UP; legitimate rugs CAN dump >5× down in one tick.
+    PRICE_SPIKE_CAP_X    = 5.0
+    PRICE_SPIKE_WINDOW_S = 5.0
+
     def update_price(self, mint: str, current_price_sol: float):
         pos = self.positions.get(mint)
         if not pos:
             return
+
+        # Reject implausible single-tick spike. Only triggers when we already
+        # have a baseline (current_price > 0) and the previous update is
+        # recent enough that a >5× jump is mathematically suspect.
+        if (pos.current_price > 0
+            and current_price_sol > pos.current_price * self.PRICE_SPIKE_CAP_X
+            and pos.price_updated_at > 0
+            and (time.time() - pos.price_updated_at) < self.PRICE_SPIKE_WINDOW_S):
+            spike = current_price_sol / pos.current_price
+            dt    = time.time() - pos.price_updated_at
+            logger.warning(
+                f"[PRICE SANITY] Rejecting implausible spike on "
+                f"{pos.symbol or mint[:8]}: {pos.current_price:.2e} -> "
+                f"{current_price_sol:.2e} ({spike:.0f}x in {dt:.1f}s) — "
+                f"likely garbage from fallback feed"
+            )
+            return
+
         pos.current_price = current_price_sol
         pos.price_updated_at = time.time()
         if current_price_sol > pos.highest_price:
