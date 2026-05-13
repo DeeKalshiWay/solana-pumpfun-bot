@@ -546,6 +546,23 @@ async def main():
             ))
         except Exception as e:
             logger.warning(f"[SYNTHETIC] failed to start injector: {e}")
+
+        # Auto-enable the price mover whenever synthetic injection is on
+        # (you ~never want one without the other). Operator can disable
+        # explicitly via SYNTHETIC_PRICE_MOVES=0. Synthetic mints have no
+        # on-chain price feed; without the mover, every position exits
+        # via no_movement at full-friction loss and the exit-logic
+        # branches (TP, trailing stop, stop loss) never fire.
+        if os.environ.get("SYNTHETIC_PRICE_MOVES", "1").lower() in ("1", "true", "yes", "on"):
+            try:
+                from tools.synthetic_price_mover import SyntheticPriceMover
+                mover = SyntheticPriceMover(risk_mgr, executor)
+                tasks.append(asyncio.create_task(
+                    mover.run(),
+                    name="synthetic_price_mover",
+                ))
+            except Exception as e:
+                logger.warning(f"[SYNTHETIC] failed to start price mover: {e}")
     elif _synth_n and not PAPER_TRADING:
         logger.critical(
             "[SYNTHETIC] Refusing to inject synthetic tokens in LIVE mode "
