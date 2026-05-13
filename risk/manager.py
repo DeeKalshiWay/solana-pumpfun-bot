@@ -1053,14 +1053,25 @@ class RiskManager:
         # indexer lags 5-15s, so the post-sell read kept returning the
         # pre-sell value and the bot kept logging sol_received=0 = -100%
         # PnL on every close. The tx receipt has the exact deltas inline.
-        sol_received = await self._sol_delta_from_tx(result.get("signature"))
-        if sol_received <= 0:
-            # Fallback: poll wallet balance with a longer wait. Logs but
-            # doesn't fail the close — at worst we under-report sol_received.
-            logger.debug(f"[SOL DELTA] tx-receipt parse miss for {mint[:8]}, falling back to poll")
-            await asyncio.sleep(8)
-            sol_after = await self.wallet.get_sol_balance()
-            sol_received = max(0.0, sol_after - sol_before)
+        #
+        # Paper mode short-circuit: the paper executor synchronously credits
+        # the wallet and returns the exact sol_received in its result dict.
+        # The signature is a fake "PAPER_SELL_*" string so _sol_delta_from_tx
+        # has no chain to query, and the sleep(8) fallback can be clobbered
+        # by concurrent buys deducting wallet during the wait → records 0
+        # despite the executor having correctly credited. Trust the
+        # executor's return value in paper mode and skip the override.
+        if result.get("venue") == "paper":
+            sol_received = float(result.get("sol_received", 0) or 0)
+        else:
+            sol_received = await self._sol_delta_from_tx(result.get("signature"))
+            if sol_received <= 0:
+                # Fallback: poll wallet balance with a longer wait. Logs but
+                # doesn't fail the close — at worst we under-report sol_received.
+                logger.debug(f"[SOL DELTA] tx-receipt parse miss for {mint[:8]}, falling back to poll")
+                await asyncio.sleep(8)
+                sol_after = await self.wallet.get_sol_balance()
+                sol_received = max(0.0, sol_after - sol_before)
 
         result["sol_received"] = sol_received
         self.close_position(mint, result)
