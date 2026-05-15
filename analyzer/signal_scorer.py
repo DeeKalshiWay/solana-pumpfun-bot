@@ -422,15 +422,23 @@ class SignalScorer:
             token["reject_reason"] = f"whale_init_{initial_buy:.1f}S"
             return False
 
-        # Symbol/name sanity check — DISABLED 2026-05-10 per
-        # analytics/holdout_validation.md: no_symbol rejections had a 0.0%
-        # rug rate on held-out data (vs 36.3% base). The filter was rejecting
-        # mints that were actually fine and contributing nothing to risk
-        # avoidance. Kept the code as a no-op comment for future audit
-        # trail; remove on next cleanup if no longer informative.
-        # if not token.get("symbol") or token.get("symbol") == "???":
-        #     token["reject_reason"] = "no_symbol"
-        #     return False
+        # Symbol/name sanity check — RE-ENABLED 2026-05-14 after live
+        # observation that `???`-symbol tokens consistently produce
+        # impossible PnL (+30,000%, +21,000%, +3,200%) because they
+        # migrate to Raydium within seconds, the bonding-curve PDA
+        # closes, and the fallback price feeds (Jupiter / DexScreener)
+        # return corrupted quotes from thin/manipulated post-migration
+        # pools. The earlier holdout audit measured 0% rug rate for
+        # these — but that was using the same corrupted feed: fake
+        # "moonshot" PnL was being counted as a win.
+        #
+        # Real-world impact in a 12h live-paper run on this filter
+        # being off: 17/33 trades were `???` mints accounting for
+        # ~12 SOL of fake credited wins on a 2.5 SOL bankroll.
+        # Real-symbol trades in the same run produced honest PnL.
+        if not token.get("symbol") or token.get("symbol") == "???":
+            token["reject_reason"] = "no_symbol"
+            return False
 
         # Already dumping hard
         price_change_5m = token.get("price_change_5m", 0)
