@@ -15,13 +15,14 @@ from solders.keypair import Keypair
 from solders.transaction import VersionedTransaction
 
 from config import (
+    BUY_SLIPPAGE_BPS,
     COMPUTE_UNIT_LIMIT,
     COMPUTE_UNIT_PRICE_MICROLAMPORTS,
     PRIORITY_FEE_SOL,
     RPC_URL,
     RPC_URLS,
     SELL_PRIORITY_FEE_SOL,
-    SLIPPAGE_BPS,
+    SELL_SLIPPAGE_BPS,
     USE_LOCAL_TX_BUILD,
 )
 
@@ -145,7 +146,7 @@ class PumpPortalExecutor:
                 sol_amount_lamports     = sol_amount_lamports,
                 v_sol_reserves          = v_sol_reserves,
                 v_token_reserves        = v_token_reserves,
-                slippage_bps            = SLIPPAGE_BPS,
+                slippage_bps            = BUY_SLIPPAGE_BPS,
                 cu_limit                = COMPUTE_UNIT_LIMIT,
                 cu_price_micro_lamports = COMPUTE_UNIT_PRICE_MICROLAMPORTS,
                 recent_blockhash        = bh,
@@ -157,7 +158,7 @@ class PumpPortalExecutor:
                 token_amount            = int(amount),
                 v_sol_reserves          = v_sol_reserves,
                 v_token_reserves        = v_token_reserves,
-                slippage_bps            = SLIPPAGE_BPS,
+                slippage_bps            = SELL_SLIPPAGE_BPS,
                 cu_limit                = COMPUTE_UNIT_LIMIT,
                 cu_price_micro_lamports = COMPUTE_UNIT_PRICE_MICROLAMPORTS,
                 recent_blockhash        = bh,
@@ -213,8 +214,10 @@ class PumpPortalExecutor:
         else:  # buy
             sol_amount = amount if denominated_in_sol else 0
             priority_fee_sol = min(PRIORITY_FEE_SOL, max(sol_amount * 0.05, 0.0005))
-        # Convert slippage bps to percent (PumpPortal uses percent, not bps)
-        slippage_pct = SLIPPAGE_BPS / 100
+        # Convert slippage bps to percent (PumpPortal uses percent, not bps).
+        # Asymmetric: tight on entries, wide on exits.
+        bps = SELL_SLIPPAGE_BPS if action == "sell" else BUY_SLIPPAGE_BPS
+        slippage_pct = bps / 100
 
         payload = {
             "publicKey":         str(self.pubkey),
