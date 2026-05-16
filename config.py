@@ -411,7 +411,23 @@ STAMPEDE_MULT_STALL       = _env_float("STAMPEDE_MULT_STALL",         5.0)
 HOLDER_CONCENTRATION_LIMIT_PCT = 70.0
 
 # ─── EXECUTION SETTINGS ────────────────────────────────────────────────────────
-SLIPPAGE_BPS               = 1500   # 15% — pump.fun tokens need wide slippage
+# Single global slippage. Kept for backward compat — used as a fallback when
+# the asymmetric overrides below aren't set. Most live runs should set the
+# asymmetric values instead.
+SLIPPAGE_BPS               = _env_int("SLIPPAGE_BPS",       1500)   # 15%
+
+# Asymmetric slippage. Live observation 2026-05-16: a single global at 15%
+# was too tight for emergency sells — pump.fun's bonding-curve sell instruction
+# rejects with `Custom: 6001` (min-sol-output not met) when the curve moves
+# more than 15% against us between tx send and confirm. Five live positions
+# got stranded at 0.05 SOL each because every force-sell reverted on chain.
+#
+# The fix: keep BUY slippage tight (you don't want to overpay into a pump)
+# but loosen SELL slippage substantially so emergency exits actually fill,
+# even at worse prices. Eating 5–10% on a losing exit is far better than
+# 100% on a stranded token.
+BUY_SLIPPAGE_BPS           = _env_int("BUY_SLIPPAGE_BPS",   SLIPPAGE_BPS)
+SELL_SLIPPAGE_BPS          = _env_int("SELL_SLIPPAGE_BPS",  4000)   # 40%
 PRIORITY_FEE_MICROLAMPORTS = 300000 # Jupiter/RPC fee
 PRIORITY_FEE_SOL           = _env_float("PRIORITY_FEE_SOL",      0.001)
 # Sells during a dump need to land FAST or the price moves further. Stop-loss
