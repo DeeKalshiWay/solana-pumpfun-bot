@@ -672,15 +672,41 @@
   }
 
   // ── Boot ─────────────────────────────────────────────────────────────────
-  // Probe with no auth first. If 200, no auth required → start polling.
-  // If 401, surface login overlay (Basic Auth is enabled on server).
-  fetch('/api/status')
-    .then(r => {
-      if (r.status === 401) { $('login').classList.add('show'); $('user').focus(); }
-      else if (r.ok)        { startPolling(); }
-      else                  { $('err').textContent = `server error ${r.status}`; $('login').classList.add('show'); }
-    })
-    .catch(() => { $('login').classList.add('show'); $('user').focus(); });
+  // Probe /api/status with no auth:
+  //   200  → no auth required, start polling normally.
+  //   401  → server requires Basic Auth, surface the login overlay.
+  //   5xx  → server is up but errored; show error banner (no login form).
+  //   net  → server unreachable; retry quietly every 2 s and show
+  //          a "connecting…" banner. Don't surface a login form, since
+  //          asking for credentials on a bot-offline state is misleading
+  //          and the form does nothing useful in that state.
+  function showOffline(msg) {
+    let banner = document.getElementById('offline-banner');
+    if (!banner) {
+      banner = document.createElement('div');
+      banner.id = 'offline-banner';
+      banner.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#a02020;color:#fff;padding:10px;text-align:center;font-family:monospace;z-index:9999;letter-spacing:2px;font-size:12px;';
+      document.body.appendChild(banner);
+    }
+    banner.textContent = msg;
+  }
+  function clearOffline() {
+    const banner = document.getElementById('offline-banner');
+    if (banner) banner.remove();
+  }
+  function probe() {
+    fetch('/api/status')
+      .then(r => {
+        if (r.status === 401) { $('login').classList.add('show'); $('user').focus(); }
+        else if (r.ok)        { clearOffline(); startPolling(); }
+        else                  { showOffline(`SERVER ERROR ${r.status} — retrying…`); setTimeout(probe, 2000); }
+      })
+      .catch(() => {
+        showOffline('BOT OFFLINE — waiting for python main.py …');
+        setTimeout(probe, 2000);
+      });
+  }
+  probe();
 </script>
 </body>
 </html>
