@@ -428,9 +428,19 @@ def build_sell_tx_bytes(
         raise ValueError(f"sell with non-positive token_amount: {token_amount}")
     expected_sol  = expected_sol_for_tokens(v_sol_reserves, v_token_reserves, token_amount)
     min_sol_output = apply_sell_min_sol(expected_sol, slippage_bps)
+    # Defensive: prepend CreateIdempotent like the buy path does. In the
+    # normal flow the operator's ATA already exists from the buy, so this
+    # is a ~1.5K-CU no-op. But on a recovery flow (bot restart with
+    # positions loaded from disk where the ATA was closed by another
+    # tool, dust sweep, or rent-reclaim script), the sell would otherwise
+    # fail with Anchor 3012. Cheap insurance.
+    create_ata_ix = build_create_ata_idempotent_instruction(user, user, mint)
     sell_ix = build_sell_instruction(user, mint, token_amount, min_sol_output)
     return _assemble_tx_bytes(
         payer=user,
-        instructions=compute_budget_instructions(cu_limit, cu_price_micro_lamports) + [sell_ix],
+        instructions=(
+            compute_budget_instructions(cu_limit, cu_price_micro_lamports)
+            + [create_ata_ix, sell_ix]
+        ),
         recent_blockhash=recent_blockhash,
     )
