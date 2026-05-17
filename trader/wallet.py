@@ -4,6 +4,8 @@ Solana wallet setup, balance checking, and keypair management.
 Uses solders for keypair handling and aiohttp for RPC calls.
 """
 
+import time
+
 import aiohttp
 import base58
 from loguru import logger
@@ -19,6 +21,12 @@ class SolanaWallet:
         self.keypair = self._load_keypair()
         self.pubkey  = self.keypair.pubkey()
         self.session: aiohttp.ClientSession = None
+        # Cache the last successful balance read so transient RPC failures
+        # (timeouts, 401s, rate-limits) don't return 0 — which would trigger
+        # a false −100% drawdown in the risk manager and emergency-stop the
+        # bot. None until the FIRST successful read at boot.
+        self._last_known_balance: float | None = None
+        self._last_balance_read_ts: float = 0.0
         logger.info(f"Wallet loaded: {str(self.pubkey)[:20]}...")
 
     def _load_keypair(self) -> Keypair:
@@ -54,10 +62,53 @@ class SolanaWallet:
             return await resp.json()
 
     async def get_sol_balance(self) -> float:
-        """Returns SOL balance of the wallet."""
-        result = await self._rpc("getBalance", [str(self.pubkey)])
-        lamports = result.get("result", {}).get("value", 0)
-        return lamports / 1e9  # lamports to SOL
+        """Returns SOL balance of the wallet.
+
+        Resilient to transient RPC failures: caches the last successful
+        read and returns it if the current call fails or returns no
+        result. Without this, a single timeout / 401 / rate-limit makes
+        the call return 0, which makes risk_manager compute a fake
+        −100% drawdown vs the starting baseline → emergency stop.
+
+        Falls back to 0 only if we have NO prior successful read AND
+        the current call fails (so a totally broken RPC at boot still
+        results in graceful degradation rather than a crash).
+        """
+        try:
+            result = await self._rpc("getBalance", [str(self.pubkey)])
+            res_obj = result.get("result")
+            if isinstance(res_obj, dict) and "value" in res_obj:
+                sol = res_obj["value"] / 1e9
+                self._last_known_balance = sol
+                self._last_balance_read_ts = time.time()
+                return sol
+            # RPC returned an error response or unexpected shape.
+            err_msg = (result.get("error") or {}).get("message", "no result field")
+            logger.warning(
+                f"[WALLET] getBalance RPC error: {err_msg} — "
+                f"returning cached {self._last_known_balance}"
+            )
+        except (TimeoutError, aiohttp.ClientError) as e:
+            logger.warning(
+                f"[WALLET] getBalance network error: {type(e).__name__}: {e} — "
+                f"returning cached {self._last_known_balance}"
+            )
+        except Exception as e:
+            logger.warning(
+                f"[WALLET] getBalance unexpected error: {type(e).__name__}: {e} — "
+                f"returning cached {self._last_known_balance}"
+            )
+
+        if self._last_known_balance is not None:
+            return self._last_known_balance
+        # First-ever call failed; nothing to cache. 0 is the only sensible
+        # default here, but it should be rare (only at boot with a broken
+        # RPC). Caller should handle a 0 read at boot specially.
+        logger.error(
+            "[WALLET] getBalance failed on first call (no cache available) — "
+            "returning 0; check RPC_URL"
+        )
+        return 0.0
 
     async def get_token_balance(self, mint: str) -> float:
         """Returns token balance for a given SPL mint."""
