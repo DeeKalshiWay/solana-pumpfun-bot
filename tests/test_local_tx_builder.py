@@ -374,8 +374,10 @@ class TestBuildBuyTxBytes:
             recent_blockhash=Hash.default(),
         )
         tx = VersionedTransaction.from_bytes(b)
-        # 3 instructions: CU limit, CU price, pump.fun buy
-        assert len(tx.message.instructions) == 3
+        # 4 instructions: CU limit, CU price, ATA create-idempotent,
+        # pump.fun buy. The ATA create was added 2026-05-17 to fix
+        # ~30% of buys failing with Anchor 3012 (AccountNotInitialized).
+        assert len(tx.message.instructions) == 4
 
     def test_raises_on_zero_expected_tokens(self):
         from solders.hash import Hash
