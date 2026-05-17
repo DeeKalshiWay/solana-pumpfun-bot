@@ -23,7 +23,12 @@ import time
 
 from loguru import logger
 
-from config import MIN_BUY_SCORE
+from config import (
+    AUTO_TUNE_ENABLED,
+    AUTO_TUNE_OFFSET_MAX,
+    AUTO_TUNE_OFFSET_MIN,
+    MIN_BUY_SCORE,
+)
 
 STATE_FILE        = "logs/auto_tune_state.json"
 TICK_INTERVAL_S   = 1800   # re-evaluate every 30 min
@@ -31,8 +36,10 @@ LOOKBACK_TRADES   = 100    # trades back to compute WR
 MIN_SAMPLE_SIZE   = 30     # need at least this many before adjusting
 WR_LOW_THRESHOLD  = 0.45   # WR below this → tighten (offset += 1)
 WR_HIGH_THRESHOLD = 0.70   # WR above this → loosen (offset -= 1)
-OFFSET_MIN        = -3     # never let it loosen more than 3 below base
-OFFSET_MAX        =  5     # never let it tighten more than 5 above base
+# Bounds: kept as module aliases of the env-driven config so existing
+# imports keep working, and so tests / tools can monkeypatch them.
+OFFSET_MIN        = AUTO_TUNE_OFFSET_MIN
+OFFSET_MAX        = AUTO_TUNE_OFFSET_MAX
 
 
 class AutoTuner:
@@ -88,7 +95,18 @@ class AutoTuner:
             logger.debug(f"[AUTO-TUNE] save failed: {e}")
 
     def effective_min_score(self) -> int:
-        """Live threshold. Other modules should call this, not the constant."""
+        """Live threshold. Other modules should call this, not the constant.
+
+        When AUTO_TUNE_ENABLED is False the offset is suppressed at READ
+        time — the in-memory offset is preserved (so flipping the env
+        var back on doesn't lose state) but the threshold reported is
+        the operator's chosen base. Live ops use case: WR statistic is
+        polluted by trades that happened under since-fixed bugs and is
+        no longer predictive; operator wants to freeze the threshold
+        until a fresh post-fix sample accumulates.
+        """
+        if not AUTO_TUNE_ENABLED:
+            return MIN_BUY_SCORE
         return MIN_BUY_SCORE + self.offset
 
     def stats(self) -> dict:
@@ -105,6 +123,12 @@ class AutoTuner:
 
     def _evaluate(self):
         """One pass of the tuning logic. Reads closed_trades from risk_mgr."""
+        if not AUTO_TUNE_ENABLED:
+            # Frozen via env. Don't read trades, don't shift offset,
+            # don't log spam. Operator is intentionally pinning to base.
+            self.last_action  = "frozen_env_disabled"
+            self.last_updated = time.time()
+            return
         if self._risk_mgr is None:
             return
         recent = list(self._risk_mgr.closed_trades[-LOOKBACK_TRADES:])

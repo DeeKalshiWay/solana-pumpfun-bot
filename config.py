@@ -371,6 +371,25 @@ RUG_MATCH_MIN_RUGS       = _env_int("RUG_MATCH_MIN_RUGS",       1)
 RUG_MAX_PENALTY          = _env_int("RUG_MAX_PENALTY",          50)
 RUG_HARD_REJECT_MATCHES  = _env_int("RUG_HARD_REJECT_MATCHES",  3)
 
+# Auto-tuner controls. The auto_tuner watches recent-trade win-rate and
+# shifts the live MIN_BUY_SCORE up (tighten) when WR drops below
+# WR_LOW or down (loosen) when above WR_HIGH. Bounded by
+# [OFFSET_MIN, OFFSET_MAX] so it can't drift too far from the operator's
+# chosen base.
+#
+# Set AUTO_TUNE_ENABLED=false in .env to fully freeze the threshold at
+# MIN_BUY_SCORE — useful when the WR statistic is dominated by trades
+# that happened under since-fixed bugs (Anchor 3012, pre-TP1 stalls,
+# soft-only rug memory) and is therefore not predictive going forward.
+# Operator can re-enable once a fresh post-fix sample has accumulated.
+#
+# AUTO_TUNE_OFFSET_MAX=0 is a softer middle ground: auto-tuner can still
+# LOOSEN on a hot streak (offset goes negative, threshold drops) but can
+# never tighten above the base. AUTO_TUNE_OFFSET_MIN bounds loosening.
+AUTO_TUNE_ENABLED     = _env_bool("AUTO_TUNE_ENABLED",     True)
+AUTO_TUNE_OFFSET_MIN  = _env_int ("AUTO_TUNE_OFFSET_MIN",  -3)
+AUTO_TUNE_OFFSET_MAX  = _env_int ("AUTO_TUNE_OFFSET_MAX",   5)
+
 # Creators that produced rugs we've already lost on, OR rugged after we
 # rejected their token. Block at trade-loop level so we never enter again.
 # The JSON file is rebuilt by `python -m tools.build_rugger_blacklist`
