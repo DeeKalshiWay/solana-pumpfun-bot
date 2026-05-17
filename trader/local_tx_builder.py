@@ -109,6 +109,46 @@ def associated_token_address(owner: Pubkey, mint: Pubkey) -> Pubkey:
     return addr
 
 
+def build_create_ata_idempotent_instruction(
+    payer: Pubkey,
+    owner: Pubkey,
+    mint:  Pubkey,
+) -> Instruction:
+    """SPL Associated Token Account program's `CreateIdempotent` ix.
+
+    Why this exists: the very first time a wallet touches a given pump.fun
+    mint, the wallet's ATA for that mint doesn't exist on chain. The
+    pump.fun buy instruction then fails with Anchor error 3012
+    (`AccountNotInitialized`) when it tries to credit tokens to a missing
+    ATA. Solution: prepend a create-ATA instruction. The Idempotent
+    variant is safe to include on EVERY buy — if the ATA already exists,
+    it's a no-op (~1.5K CU). If it doesn't, it creates it (~10K CU).
+    Either way the buy proceeds in the same tx.
+
+    Account layout (SPL ATA program v1.0.4+):
+      0. [writable, signer] funding account (pays rent)
+      1. [writable]          associated_token_account (the ATA to create)
+      2. [                ]  wallet (owner of the ATA, NOT signer)
+      3. [                ]  mint
+      4. [                ]  system program
+      5. [                ]  SPL token program
+    Data: single byte 0x01 (CreateIdempotent discriminator).
+    """
+    ata = associated_token_address(owner, mint)
+    return Instruction(
+        program_id = ATA_PROGRAM,
+        data       = bytes([1]),
+        accounts   = [
+            AccountMeta(pubkey=payer,          is_signer=True,  is_writable=True),
+            AccountMeta(pubkey=ata,            is_signer=False, is_writable=True),
+            AccountMeta(pubkey=owner,          is_signer=False, is_writable=False),
+            AccountMeta(pubkey=mint,           is_signer=False, is_writable=False),
+            AccountMeta(pubkey=SYSTEM_PROGRAM, is_signer=False, is_writable=False),
+            AccountMeta(pubkey=TOKEN_PROGRAM,  is_signer=False, is_writable=False),
+        ],
+    )
+
+
 # ── Instruction builders ────────────────────────────────────────────────────
 
 @dataclass(frozen=True)
@@ -354,10 +394,19 @@ def build_buy_tx_bytes(
         )
     min_tokens   = apply_buy_slippage(expected, slippage_bps)
     max_sol_cost = apply_buy_max_sol(sol_amount_lamports, slippage_bps)
+    # Create the user's ATA for this mint if it doesn't already exist.
+    # Idempotent — cheap no-op when it does. Without this every first-time
+    # buy of a fresh pump.fun mint fails with Anchor error 3012
+    # (AccountNotInitialized). Live observation 2026-05-17: ~30% of buys
+    # were failing with Custom: 3012 because of this missing instruction.
+    create_ata_ix = build_create_ata_idempotent_instruction(user, user, mint)
     buy_ix = build_buy_instruction(user, mint, min_tokens, max_sol_cost)
     return _assemble_tx_bytes(
         payer=user,
-        instructions=compute_budget_instructions(cu_limit, cu_price_micro_lamports) + [buy_ix],
+        instructions=(
+            compute_budget_instructions(cu_limit, cu_price_micro_lamports)
+            + [create_ata_ix, buy_ix]
+        ),
         recent_blockhash=recent_blockhash,
     )
 
