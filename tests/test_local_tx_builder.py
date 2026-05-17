@@ -415,6 +415,29 @@ class TestBuildSellTxBytes:
                 recent_blockhash=Hash.default(),
             )
 
+    def test_sell_tx_includes_ata_create(self):
+        """Defensive: sell path must also prepend CreateIdempotent ATA ix.
+        Same instruction count as buy (4): CU limit, CU price, ATA-create,
+        pump.fun sell. Protects against recovery flows where the operator's
+        ATA was closed between buy and sell."""
+        from solders.hash import Hash
+        from solders.transaction import VersionedTransaction
+        b = build_sell_tx_bytes(
+            user=_USER, mint=_MINT,
+            token_amount=1_000_000,
+            v_sol_reserves=30 * 10**9, v_token_reserves=1_000_000_000_000,
+            slippage_bps=1500, cu_limit=200_000, cu_price_micro_lamports=300_000,
+            recent_blockhash=Hash.default(),
+        )
+        tx = VersionedTransaction.from_bytes(b)
+        assert len(tx.message.instructions) == 4, (
+            "sell tx should have 4 ixs: CU limit, CU price, ATA create, "
+            "pump.fun sell"
+        )
+        program_keys = tx.message.account_keys
+        used = [program_keys[ix.program_id_index] for ix in tx.message.instructions]
+        assert ATA_PROGRAM in used, "sell tx missing the ATA-create ix"
+
 
 class TestLocalTxEligibility:
     """The fallback gate that decides whether the local builder can
