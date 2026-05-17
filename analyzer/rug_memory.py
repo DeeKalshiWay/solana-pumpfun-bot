@@ -19,10 +19,19 @@ import time
 
 from loguru import logger
 
+from config import (
+    RUG_HARD_REJECT_MATCHES,
+    RUG_MATCH_MIN_RUGS,
+    RUG_MAX_PENALTY,
+)
+
 RUG_LOG_FILE      = "logs/rug_patterns.jsonl"
 RUG_PNL_THRESHOLD = -50.0   # pnl_pct <= this counts as a rug
-MATCH_MIN_RUGS    = 3       # need this many matching rugs before penalizing
-MAX_PENALTY       = 15      # max score points to dock per match
+# Module-level aliases kept for backward compat with tests + tools that
+# imported these names directly. Source of truth is config.py.
+MATCH_MIN_RUGS    = RUG_MATCH_MIN_RUGS
+MAX_PENALTY       = RUG_MAX_PENALTY
+HARD_REJECT_MATCHES = RUG_HARD_REJECT_MATCHES
 
 
 def _bin_init_buy(v: float) -> str:
@@ -139,6 +148,19 @@ class RugMemory:
     def matched_count(self, token: dict) -> int:
         """How many past rugs share this token's signature."""
         return self._counts.get(signature(token), 0)
+
+    def should_hard_reject(self, token: dict) -> int:
+        """If this token's signature has matched >= HARD_REJECT_MATCHES
+        historical rugs, return the match count (truthy). Else 0.
+
+        Caller is expected to gate buy at the filter stage on this value
+        being non-zero — i.e. the rug data is used as a real reject, not
+        a soft score nudge that a high-base-score token can outvote.
+        """
+        if HARD_REJECT_MATCHES <= 0:
+            return 0
+        n = self._counts.get(signature(token), 0)
+        return n if n >= HARD_REJECT_MATCHES else 0
 
     def stats(self) -> dict:
         return {
