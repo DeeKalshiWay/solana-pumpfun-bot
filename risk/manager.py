@@ -1000,10 +1000,18 @@ class RiskManager:
             ((pos.highest_price - pos.entry_price_sol) / pos.entry_price_sol) * 100
             if pos.entry_price_sol > 0 else 0
         )
+        # Gate: never stall-exit before TP1 has been hit. Live observation
+        # 2026-05-17: a +5% pump that stalled triggered momentum_stall, then
+        # buy/sell slippage + fees turned the +5% paper gain into −1.5%
+        # realized. TP1 (default 12.5%) is the bar at which we've banked
+        # enough to absorb fees; anything earlier means the rule is taking
+        # losing trades on price-flat noise. Once a TP leg has fired,
+        # remaining size is house money and stalling out is fine.
         if (
             MOMENTUM_STALL_ENABLED
             and pnl_pct >= MOMENTUM_STALL_MIN_PROFIT
             and peak_pnl_pct < TRAILING_STOP_MOONSHOT_TRIGGER
+            and len(pos.tp_levels_hit) > 0
         ):
             now = time.time()
             window_pts = [p for p in pos.price_history
