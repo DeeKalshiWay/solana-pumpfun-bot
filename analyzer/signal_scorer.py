@@ -230,7 +230,7 @@ class SignalScorer:
 
             # Hard filters first
             if not self._passes_hard_filters(token):
-                logger.debug(f"[FILTERED] {symbol}: {token.get('reject_reason')}")
+                logger.info(f"[FILTERED] {symbol}: {token.get('reject_reason')}")
                 # Counterfactual: log this rejection so we can later check what
                 # the token actually did. If our filters are filtering winners,
                 # this surfaces it.
@@ -270,7 +270,7 @@ class SignalScorer:
                 token["top10_holder_pct"] = round(pct, 1)
                 if concentration_too_high(pct):
                     token["reject_reason"] = f"top10_{pct:.0f}pct"
-                    logger.debug(f"[FILTERED] {symbol}: top 10 hold {pct:.1f}% (>limit)")
+                    logger.info(f"[FILTERED] {symbol}: top 10 hold {pct:.1f}% (>limit)")
                     counterfactual.record_rejection(token, "top10_concentration")
                     return
 
@@ -280,7 +280,7 @@ class SignalScorer:
                 # authority; anything else is a clear rug-vector.
                 if not await self._freeze_authority_safe(mint):
                     token["reject_reason"] = "freeze_authority_set"
-                    logger.debug(f"[FILTERED] {symbol}: freeze authority set")
+                    logger.info(f"[FILTERED] {symbol}: freeze authority set")
                     counterfactual.record_rejection(token, "freeze_authority_set")
                     return
 
