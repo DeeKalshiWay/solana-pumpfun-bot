@@ -357,6 +357,24 @@ class SignalScorer:
             token["reject_reason"] = "creator_blacklisted"
             return False
 
+        # Rug-pattern hard reject: this signature has rugged on us N+ times.
+        # The score-penalty path (in scoring above) is the soft nudge; this
+        # is the hard floor — if the pattern has burned us repeatedly, don't
+        # buy no matter how shiny the rest of the score looks. Threshold and
+        # sensitivity are env-tunable (RUG_HARD_REJECT_MATCHES,
+        # RUG_MATCH_MIN_RUGS in config.py).
+        rug_features = {
+            "initial_buy_sol":   token.get("initial_buy_sol", 0),
+            "bonding_curve_pct": token.get("bonding_curve_pct", 0),
+            # MUST be raw_score (pre-fusion, pre-penalty) so the lookup
+            # bucket matches what record_rug() stored. See cf89f61 contract.
+            "score":             token.get("raw_score", token.get("score", 0)),
+        }
+        n_rugs = rug_memory.should_hard_reject(rug_features)
+        if n_rugs:
+            token["reject_reason"] = f"rug_pattern_overload_{n_rugs}"
+            return False
+
         # Tier 4: noise-bot creator (Plan A 2026-05-10). Was: reject if creator
         # had ≥25 buys. Now: reject only if creator is *classified* noise — a
         # smart wallet at ≥25 buys is the signal we want, not a filter target.

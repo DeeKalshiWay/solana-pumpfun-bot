@@ -354,6 +354,23 @@ FUSION_ENABLED      = _env_bool ("FUSION_ENABLED",      True)
 FUSION_MAX_BONUS    = _env_int  ("FUSION_MAX_BONUS",    15)
 FUSION_MAX_PENALTY  = _env_int  ("FUSION_MAX_PENALTY",  10)
 
+# Rug-memory aggressiveness. The legacy defaults (kick-in=3, cap=15, no
+# hard reject) treated the data as a soft nudge: a high-base-score token
+# could still get bought even when its exact pattern had rugged on us
+# repeatedly. The defaults below use the data as a real filter:
+#   - RUG_MATCH_MIN_RUGS=1: penalty starts after the FIRST historical rug
+#     at this signature, not after three. Faster learning, more sensitivity.
+#   - RUG_MAX_PENALTY=50: effectively uncapped — overwhelming evidence can
+#     dominate the score. Linear: penalty = min(cap, n_matches * 2).
+#   - RUG_HARD_REJECT_MATCHES=3: signatures with N+ historical rugs are
+#     hard-rejected at the filter stage, regardless of score. "We've seen
+#     this pattern lose three times — don't buy no matter how shiny."
+# All three are env-tunable so the operator can dial back if it gets too
+# aggressive and the buy rate collapses.
+RUG_MATCH_MIN_RUGS       = _env_int("RUG_MATCH_MIN_RUGS",       1)
+RUG_MAX_PENALTY          = _env_int("RUG_MAX_PENALTY",          50)
+RUG_HARD_REJECT_MATCHES  = _env_int("RUG_HARD_REJECT_MATCHES",  3)
+
 # Creators that produced rugs we've already lost on, OR rugged after we
 # rejected their token. Block at trade-loop level so we never enter again.
 # The JSON file is rebuilt by `python -m tools.build_rugger_blacklist`
