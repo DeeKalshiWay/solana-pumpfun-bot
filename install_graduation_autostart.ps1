@@ -41,8 +41,16 @@ $Action = New-ScheduledTaskAction `
     -Argument "-WindowStyle Hidden -ExecutionPolicy Bypass -File `"$RunScript`"" `
     -WorkingDirectory $ScriptDir
 
-# Trigger: at user logon
-$Trigger = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+# Triggers: at user logon, PLUS a 15-min self-heal repetition. If the
+# watchdog process itself ever dies (task killed, powershell crash), the
+# repetition relaunches it within 15 min; the watchdog's duplicate guard
+# makes the extra fires no-ops while everything is healthy, and Task
+# Scheduler's default IgnoreNew policy skips fires while an instance runs.
+$TriggerLogon = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+$TriggerHeal = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
+    -RepetitionInterval (New-TimeSpan -Minutes 15) `
+    -RepetitionDuration (New-TimeSpan -Days 3650)
+$Trigger = @($TriggerLogon, $TriggerHeal)
 
 # Settings: keep alive, restart on failure, no time limit
 $Settings = New-ScheduledTaskSettingsSet `

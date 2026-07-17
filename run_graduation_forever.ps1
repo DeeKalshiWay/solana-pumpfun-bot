@@ -27,8 +27,17 @@ function Write-WatchdogLog {
     Write-Host $line
 }
 
-# Guard: if a sniper is already running (started manually or by another
-# watchdog), don't double-trade the paper book.
+# Guard 1 (atomic): a named OS mutex — only one watchdog can ever hold it.
+# A process-list check alone is racy: two watchdogs starting in the same
+# second both pass it before either has spawned python (observed 2026-07-16,
+# double-traded the paper book for 20 min).
+$WatchdogMutex = New-Object System.Threading.Mutex($false, "Global\GraduationSniperWatchdog")
+if (-not $WatchdogMutex.WaitOne(0)) {
+    Write-WatchdogLog "Another watchdog holds the mutex - exiting."
+    exit 0
+}
+
+# Guard 2 (belt): a sniper started outside any watchdog (e.g. manually).
 $existing = Get-CimInstance Win32_Process -Filter "Name like 'python%'" |
     Where-Object { $_.CommandLine -like "*tools.graduation_sniper*" }
 if ($existing) {
