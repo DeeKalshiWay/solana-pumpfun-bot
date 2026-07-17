@@ -82,7 +82,11 @@ MIN_TRACK_SECONDS = 60.0
 # --- Position management --------------------------------------------------------
 SIZE_SOL = 0.25
 MAX_CONCURRENT = 2
-STALL_STOP_SOL = 1.5
+# 2026-07-16: widened 1.5 -> 3.0 after the first 20-trade readout: 9 of 13
+# stall-stops later graduated — the 1.5 stop was whipsawed by routine
+# late-curve profit-taking dips on tokens that then completed. The 4 true
+# failures dumped hard within seconds, so the wider stop costs little there.
+STALL_STOP_SOL = 3.0
 TIMEOUT_MIN = 15.0
 # PRIMARY exit: curve-sell just before graduation. +3.82%/win vs -6.94%/stall
 # verified in the 2026-06-06 unit test; EV positive above ~65% completion.
