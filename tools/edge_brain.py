@@ -45,8 +45,11 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BRAIN_FILE = os.path.join(ROOT, "logs", "edge_brain.json")
 JOURNAL = os.path.join(ROOT, "logs", "edge_brain_journal.jsonl")
 
-# Break-even win rate for the graduation trade (+3.82% win / -6.94% loss)
-BREAKEVEN_WIN_RATE = 0.645
+# Break-even win rate for the graduation trade. 0.645 was derived from the
+# original 1.5-SOL stop (+3.82% win / -6.94% loss); updated 2026-07-17 when
+# grad_report's drift check fired: realized last-20 economics under the
+# persistence/disaster stops are +4.3% win / -10.7% loss -> 71%.
+BREAKEVEN_WIN_RATE = 0.71
 MIN_N_VETO = 8          # min samples in a bucket before it can be vetoed
 MIN_N_ARM = 15          # min samples per arm before autotune trusts it
 CREATOR_STRIKE_LIMIT = 2
@@ -151,7 +154,10 @@ class EdgeBrain:
             d["pnl"] = round(d["pnl"] + pnl_sol, 6)
 
         # Mistake memory
-        if exit_reason in ("stall_stop", "timeout"):
+        # 2026-07-17: disaster_stop added — it was missing when the exit
+        # reason was introduced, so TOSHI (7AzV4vtq) was re-entered 3x in
+        # 6 min while a pump-dump cycle ran on the curve top (-0.18 SOL)
+        if exit_reason in ("stall_stop", "timeout", "disaster_stop"):
             self.data["no_reentry"].append(mint)
             self.data["no_reentry"] = self.data["no_reentry"][-500:]
             if creator:
