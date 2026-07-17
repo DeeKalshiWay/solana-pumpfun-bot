@@ -164,8 +164,40 @@ When operator returns and starts a new session:
 3. If any condition is MET, surface it: "Hey, Trigger N has fired — ready to ship the work it gates?"
 4. If none fired: don't bring it up unless asked.
 
+## Trigger 5 — Graduation sniper Telegram alerts (edge item #4, deferred 2026-07-16)
+
+### Wait condition
+
+ANY of:
+- Operator asks about the graduation sniper's status/results in a future session
+  (remind them this is pending before reporting)
+- The graduation sniper is found dead/silent again (this is exactly what alerts prevent —
+  it already cost 4 days of samples when the July 12 Windows Update reboot killed it silently)
+- Graduation strategy goes LIVE with real SOL (alerts become risk management, not QoL — do not go live without them)
+- Operator explicitly says "ship graduation telegram alerts"
+
+### What to build (~1 hour, pre-approved 2026-07-16)
+
+Wire `tools/graduation_sniper.py` + `tools/grad_tail.py` into the existing
+`logger/telegram_alerts.py` module (already used by the main bot):
+- open/close/whipsaw (`post_stop_grad`) events in real time
+- daily digest (balance, win rate, shadow completion rate, tail-hold ledger)
+- **dead-man alert**: no heartbeat for 10 min, or zero entries AND zero skips
+  for N hours during active market hours (catches the PumpPortal-style silent
+  degradation a process watchdog cannot)
+
+### How to verify the trigger fired
+
+```bash
+cd /c/Users/denni/OneDrive/Desktop/pump.bot2.0 && python -m tools.grad_report
+# if PROCESS shows "NO OUTPUT FOR ..." -> the dead-man condition already fired
+```
+
+---
+
 Operator prompts that bypass triggers:
 - "ship Jito bundles" → Trigger 1
 - "ship Option 2 LaserStream scaffold" → Trigger 2
 - "fix the TP partial-sell PnL tracking" → Trigger 3
 - "ship rugcheck pre-buy" → Trigger 4
+- "ship graduation telegram alerts" → Trigger 5
