@@ -51,6 +51,7 @@ def main():
 
     # Trades
     opens, closes, skips, whipsaws = [], [], [], []
+    shadow, tail_opens, tail_closes, tail_passes = [], [], [], []
     if os.path.exists(TRADES):
         for line in open(TRADES, encoding="utf-8"):
             line = line.strip()
@@ -61,7 +62,9 @@ def main():
             except Exception:
                 continue
             {"open": opens, "close": closes, "skip": skips,
-             "post_stop_grad": whipsaws}.get(r.get("event"), []).append(r)
+             "post_stop_grad": whipsaws, "shadow_outcome": shadow,
+             "tail_open": tail_opens, "tail_close": tail_closes,
+             "tail_pass": tail_passes}.get(r.get("event"), []).append(r)
 
     print(f"\nTRADES: {len(opens)} opened, {len(closes)} closed, "
           f"{len(skips)} skipped by filters/brain")
@@ -121,7 +124,8 @@ def main():
     # Whipsaw monitor — post-stop outcome tagging (deployed 2026-07-16)
     WHIPSAW_TRACKING_SINCE = 1784267400.0
     era_stops = [c for c in closes
-                 if c.get("exit_reason") in ("stall_stop", "timeout")
+                 if c.get("exit_reason") in ("stall_stop", "timeout",
+                                             "disaster_stop")
                  and c.get("ts", 0) >= WHIPSAW_TRACKING_SINCE]
     pending = state.get("recent_stops", {})
     if era_stops or whipsaws or pending:
@@ -139,6 +143,50 @@ def main():
                   f"{w.get('stop_to_grad_s', 0):.0f}s after "
                   f"{w.get('stop_reason','?')} "
                   f"({w.get('stopped_pnl_sol', 0):+.4f} SOL)")
+
+    # Shadow completion dataset — every watched token that hit the 80-SOL
+    # decision zone, traded or not (deployed 2026-07-16)
+    if shadow:
+        grads = [s for s in shadow if s.get("outcome") == "graduated"]
+        rate = len(grads) / len(shadow)
+        print(f"\nSHADOW COMPLETION (all tokens that hit the decision zone):")
+        print(f"  {len(grads)}/{len(shadow)} graduated ({rate:.0%})   "
+              f"[thesis needs ~65-77% depending on stop economics]")
+        by_hour: dict = {}
+        for s in shadow:
+            h = (s.get("snap") or {}).get("hour_utc")
+            if h is None:
+                continue
+            d = by_hour.setdefault(h, [0, 0])
+            d[0] += 1
+            d[1] += int(s.get("outcome") == "graduated")
+        rows = [(h, d[0], d[1]) for h, d in sorted(by_hour.items())
+                if d[0] >= 3]
+        if rows:
+            print("  completion by UTC hour (n>=3):")
+            for h, n, g in rows:
+                print(f"    {h:02d}:00  n={n:>3}  grad={g / n:.0%}")
+
+    # Tail-hold (post-migration bounce, paper — deployed 2026-07-16)
+    if tail_opens or tail_closes or tail_passes:
+        tail_bal = state.get("tail", {}).get("realized_sol", 0.0)
+        print(f"\nTAIL-HOLD (post-migration bounce, paper):")
+        print(f"  watches: {len(tail_opens)} entered, "
+              f"{len(tail_passes)} passed (no setup/feed), "
+              f"ledger {tail_bal:+.4f} SOL")
+        if tail_closes:
+            t_wins = [c for c in tail_closes if (c.get("pnl_sol") or 0) > 0]
+            t_net = sum(c.get("pnl_sol") or 0 for c in tail_closes)
+            print(f"  closed: {len(t_wins)}/{len(tail_closes)} wins, "
+                  f"net {t_net:+.4f} SOL")
+            for c in tail_closes[-5:]:
+                ts = time.strftime("%m-%d %H:%M",
+                                   time.localtime(c.get("ts", 0)))
+                print(f"    {ts}  {c.get('symbol','?'):<12} "
+                      f"{c.get('pnl_sol', 0):+.4f} SOL "
+                      f"({c.get('net_pct', 0):+.1f}%) "
+                      f"{c.get('exit_reason','?')} "
+                      f"hold={c.get('hold_s', 0):.0f}s")
 
     if skips:
         print(f"\n  last 5 skips:")

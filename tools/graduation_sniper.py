@@ -57,6 +57,7 @@ from concurrent.futures import ThreadPoolExecutor
 import websockets
 
 from tools.edge_brain import EdgeBrain
+from tools.grad_tail import TailHolder
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TRADES_LOG = os.path.join(ROOT, "logs", "graduation_trades.jsonl")
@@ -82,11 +83,16 @@ MIN_TRACK_SECONDS = 60.0
 # --- Position management --------------------------------------------------------
 SIZE_SOL = 0.25
 MAX_CONCURRENT = 2
-# 2026-07-16: widened 1.5 -> 3.0 after the first 20-trade readout: 9 of 13
-# stall-stops later graduated — the 1.5 stop was whipsawed by routine
-# late-curve profit-taking dips on tokens that then completed. The 4 true
-# failures dumped hard within seconds, so the wider stop costs little there.
-STALL_STOP_SOL = 3.0
+# 2026-07-16 stop redesign. First 20-trade readout: 9/13 stall-stops later
+# graduated (the 1.5 stop sold routine late-curve dips), and MASKTABLE then
+# gapped 4.2 SOL through a widened 3.0 stop and recovered within ~3 min —
+# flushes are fast and deep, so ANY stop that reacts inside the flush sells
+# every whipsaw at the low. The stall-stop now requires the drawdown to
+# PERSIST (dead tokens stay down; whipsaws recover in 2-3 min); only a
+# disaster-depth flush exits immediately. Timeout remains the final backstop.
+STALL_STOP_SOL = 3.0             # underwater threshold (vs entry v_sol)...
+STALL_CONFIRM_S = 300.0          # ...that must persist this long to fire
+DISASTER_STOP_SOL = 8.0          # unconditional exit — thesis broken
 TIMEOUT_MIN = 15.0
 # PRIMARY exit: curve-sell just before graduation. +3.82%/win vs -6.94%/stall
 # verified in the 2026-06-06 unit test; EV positive above ~65% completion.
@@ -144,6 +150,9 @@ class Tracker:
         # (ts, sol_delta) per poll interval where the curve moved
         self.intervals: deque = deque(maxlen=400)
         self.rejected_reason: str | None = None
+        # Shadow-completion dataset: features frozen the first time this
+        # token qualifies for the decision zone (see _maybe_shadow_snap)
+        self.shadow_snap: dict | None = None
 
     @property
     def real_sol(self) -> float:
@@ -214,6 +223,10 @@ class GraduationSniper:
         self.state.setdefault("recent_stops", {})
         self.pool = ThreadPoolExecutor(max_workers=6)
         self.brain = EdgeBrain()
+        self.state.setdefault("tail", {"realized_sol": 0.0})
+        self.tail = TailHolder(log_fn=_log, state=self.state,
+                               save_fn=lambda: _save_state(self.state),
+                               pool=self.pool)
         self.autotune = os.environ.get("EDGE_BRAIN_AUTOTUNE", "1") != "0"
         self.entry_real_sol = ENTRY_REAL_SOL
         self.velocity_floor = VELOCITY_FLOOR_SOL
@@ -292,6 +305,7 @@ class GraduationSniper:
                     if v_sol <= 0 or v_tok <= 0:
                         return
                     t.on_poll(v_sol, v_tok)
+                    self._maybe_shadow_snap(t)
                     if (mint in self.state["positions"]
                             and t.real_sol >= EXIT_REAL_SOL):
                         self._close(mint, "pre_grad_exit", 0.0)
@@ -326,6 +340,39 @@ class GraduationSniper:
                       f"— reconnect in {backoff:.0f}s", flush=True)
                 await asyncio.sleep(backoff)
                 backoff = min(backoff * 2, 60)
+
+    # ---------------- shadow completion dataset ----------------
+    # We only trade ~3 tokens/day but watch 50-100 through the hot zone.
+    # Snapshot every token the FIRST time it would clear the basic entry
+    # window (fixed 80 SOL, not the brain-tuned threshold, so the dataset
+    # stays comparable across re-tunes) and later log whether it graduated.
+    # This measures completion rate by hour/velocity/climb-quality ~30x
+    # faster than trading does — the dataset the entry thresholds and the
+    # tail-hold selection filter are tuned from.
+    def _maybe_shadow_snap(self, t: Tracker):
+        if t.shadow_snap is not None:
+            return
+        rs = t.real_sol
+        if not (80.0 <= rs < ENTRY_MAX_REAL_SOL):
+            return
+        if time.time() - t.first_seen < MIN_TRACK_SECONDS:
+            return
+        steps, max_share = t.climb_quality()
+        t.shadow_snap = {
+            "ts": time.time(), "real_sol": round(rs, 2),
+            "velocity_5m": round(t.velocity(VELOCITY_WINDOW_S), 2),
+            "steps": steps, "max_share": round(max_share, 2),
+            "hour_utc": time.gmtime().tm_hour,
+        }
+
+    def _shadow_outcome(self, t: Tracker, outcome: str):
+        if not t.shadow_snap:
+            return
+        _log({"event": "shadow_outcome", "mint": t.mint, "symbol": t.symbol,
+              "outcome": outcome,
+              "secs_to_outcome": round(time.time() - t.shadow_snap["ts"], 0),
+              "snap": t.shadow_snap})
+        t.shadow_snap = None
 
     # ---------------- strategy ----------------
     def _maybe_enter(self, t: Tracker):
@@ -405,7 +452,7 @@ class GraduationSniper:
             self.state["account"].get("realized_sol", 0.0) + pnl, 6)
         # Whipsaw monitor: remember abandoned positions so we can log whether
         # the token graduates after we bailed (the stop-tuning ground truth).
-        if reason in ("stall_stop", "timeout"):
+        if reason in ("stall_stop", "timeout", "disaster_stop"):
             self.state["recent_stops"][mint] = {
                 "symbol": pos["symbol"], "stop_ts": time.time(),
                 "pnl_sol": round(pnl, 5), "reason": reason}
@@ -446,6 +493,16 @@ class GraduationSniper:
         t = self.trackers.pop(mint, None)
         if t:
             print(f"[GRAD] {t.symbol} graduated — untracked", flush=True)
+            self._shadow_outcome(t, "graduated")
+            # Tail-hold handoff: only the organic cohort — our pre-grad
+            # telemetry is the selection filter for the post-flush bounce
+            steps, max_share = t.climb_quality()
+            vel = t.velocity(VELOCITY_WINDOW_S)
+            if (steps >= DIVERSITY_MIN_INTERVALS
+                    and max_share <= BUNDLE_MAX_SHARE and vel >= 1.0):
+                self.tail.on_graduation(mint, t.symbol, {
+                    "steps": steps, "max_share": round(max_share, 2),
+                    "velocity_5m": round(vel, 2)})
         rs = self.state["recent_stops"].pop(mint, None)
         if rs:
             elapsed = round(time.time() - rs.get("stop_ts", 0), 0)
@@ -475,16 +532,27 @@ class GraduationSniper:
             for mint in list(self.state["positions"].keys()):
                 pos = self.state["positions"][mint]
                 t = self.trackers.get(mint)
-                if t and t.v_sol <= pos["entry_v_sol"] - STALL_STOP_SOL:
-                    self._close(mint, "stall_stop", STALL_HAIRCUT_PCT)
-                elif now - pos["entry_ts"] > TIMEOUT_MIN * 60:
+                dd = (pos["entry_v_sol"] - t.v_sol) if t else 0.0
+                if dd >= DISASTER_STOP_SOL:
+                    self._close(mint, "disaster_stop", STALL_HAIRCUT_PCT)
+                elif dd >= STALL_STOP_SOL:
+                    since = pos.setdefault("underwater_since", now)
+                    if now - since >= STALL_CONFIRM_S:
+                        self._close(mint, "stall_stop", STALL_HAIRCUT_PCT)
+                else:
+                    pos.pop("underwater_since", None)
+                if (mint in self.state["positions"]
+                        and now - pos["entry_ts"] > TIMEOUT_MIN * 60):
                     self._close(mint, "timeout", STALL_HAIRCUT_PCT)
             for mint in list(self.trackers.keys()):
                 if mint in self.state["positions"]:
                     continue
                 t = self.trackers[mint]
-                if (now - t.last_change_ts > STALE_DROP_S
-                        or t.real_sol < HOT_ZONE_MIN_SOL - 10):
+                if t.real_sol < HOT_ZONE_MIN_SOL - 10:
+                    self._shadow_outcome(t, "died")     # dumped out of zone
+                    del self.trackers[mint]
+                elif now - t.last_change_ts > STALE_DROP_S:
+                    self._shadow_outcome(t, "stalled")  # 30 min, no trades
                     del self.trackers[mint]
             # Expire whipsaw-monitor entries after 24h (didn't graduate = a
             # good stop; the absence of a post_stop_grad event is the label)
@@ -527,6 +595,7 @@ class GraduationSniper:
                 hot_s = " ".join(f"{t.symbol}@{t.real_sol:.1f}" for t in hot)
                 print(f"[GRAD] heartbeat tracked={len(self.trackers)} "
                       f"open={len(self.state['positions'])} "
+                      f"tail={self.tail.active_count} "
                       f"balance={bal:.3f} SOL | hottest: {hot_s} "
                       f"@ {time.strftime('%H:%M:%S')}", flush=True)
                 last_heartbeat = now
@@ -545,6 +614,7 @@ class GraduationSniper:
             self.curve_poll_loop(),
             self.migration_ws_loop(),
             self.manage_loop(),
+            self.tail.run(),
         )
 
 
