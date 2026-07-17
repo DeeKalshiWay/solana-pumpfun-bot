@@ -50,7 +50,7 @@ def main():
                   f"  age={age:.0f}min")
 
     # Trades
-    opens, closes, skips = [], [], []
+    opens, closes, skips, whipsaws = [], [], [], []
     if os.path.exists(TRADES):
         for line in open(TRADES, encoding="utf-8"):
             line = line.strip()
@@ -60,8 +60,8 @@ def main():
                 r = json.loads(line)
             except Exception:
                 continue
-            {"open": opens, "close": closes, "skip": skips}.get(
-                r.get("event"), []).append(r)
+            {"open": opens, "close": closes, "skip": skips,
+             "post_stop_grad": whipsaws}.get(r.get("event"), []).append(r)
 
     print(f"\nTRADES: {len(opens)} opened, {len(closes)} closed, "
           f"{len(skips)} skipped by filters/brain")
@@ -86,6 +86,59 @@ def main():
             print(f"    {ts}  {c.get('symbol','?'):<12} "
                   f"{c.get('pnl_sol', 0):+.4f} SOL ({c.get('net_pct', 0):+.1f}%) "
                   f"{c.get('exit_reason','?')} hold={c.get('hold_s',0):.0f}s")
+
+    # Realized economics vs the brain's assumed break-even (watch item
+    # 2026-07-16: BREAKEVEN_WIN_RATE was derived from the old 1.5-SOL stop's
+    # -6.9% loss; the 3.0 stop makes losses bigger, raising true break-even)
+    recent = closes[-20:]
+    wins_pct = [c.get("net_pct", 0) for c in recent
+                if (c.get("pnl_sol") or 0) > 0]
+    loss_pct = [c.get("net_pct", 0) for c in recent
+                if (c.get("pnl_sol") or 0) <= 0]
+    if wins_pct and loss_pct:
+        avg_w = sum(wins_pct) / len(wins_pct)
+        avg_l = sum(loss_pct) / len(loss_pct)
+        true_be = abs(avg_l) / (avg_w + abs(avg_l))
+        print(f"\nREALIZED ECONOMICS (last {len(recent)} closes):")
+        print(f"  avg win {avg_w:+.1f}%   avg loss {avg_l:+.1f}%   "
+              f"-> true break-even win rate {true_be:.0%}")
+        try:
+            from tools.edge_brain import BREAKEVEN_WIN_RATE
+            drift = true_be - BREAKEVEN_WIN_RATE
+            if abs(drift) > 0.05:
+                verdict = ("UNDERSTATES risk - brain vetoes fire too late"
+                           if drift > 0 else
+                           "OVERSTATES risk - brain vetoes fire too early")
+                print(f"  [!] brain assumes {BREAKEVEN_WIN_RATE:.0%} "
+                      f"(drift {drift:+.0%}) - {verdict}. "
+                      f"Consider updating BREAKEVEN_WIN_RATE in edge_brain.py")
+            else:
+                print(f"  brain assumes {BREAKEVEN_WIN_RATE:.0%} - "
+                      f"within tolerance")
+        except Exception:
+            pass
+
+    # Whipsaw monitor — post-stop outcome tagging (deployed 2026-07-16)
+    WHIPSAW_TRACKING_SINCE = 1784267400.0
+    era_stops = [c for c in closes
+                 if c.get("exit_reason") in ("stall_stop", "timeout")
+                 and c.get("ts", 0) >= WHIPSAW_TRACKING_SINCE]
+    pending = state.get("recent_stops", {})
+    if era_stops or whipsaws or pending:
+        n_whip = len(whipsaws)
+        left = sum(abs(w.get("stopped_pnl_sol") or 0) for w in whipsaws)
+        print(f"\nWHIPSAW MONITOR (stops that later graduated):")
+        print(f"  {n_whip} of {len(era_stops)} tagged stops graduated after "
+              f"we bailed ({len(pending)} still pending, 24h window)")
+        if n_whip:
+            print(f"  SOL lost to whipsaws: {left:.4f} "
+                  f"(these were winners exited at a loss)")
+        for w in whipsaws[-5:]:
+            ts = time.strftime("%m-%d %H:%M", time.localtime(w.get("ts", 0)))
+            print(f"    {ts}  {w.get('symbol','?'):<12} graduated "
+                  f"{w.get('stop_to_grad_s', 0):.0f}s after "
+                  f"{w.get('stop_reason','?')} "
+                  f"({w.get('stopped_pnl_sol', 0):+.4f} SOL)")
 
     if skips:
         print(f"\n  last 5 skips:")

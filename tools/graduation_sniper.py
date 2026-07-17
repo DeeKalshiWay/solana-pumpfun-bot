@@ -187,7 +187,8 @@ def _load_state() -> dict:
         except Exception:
             pass
     return {"positions": {},
-            "account": {"seed_sol": SEED_SOL, "realized_sol": 0.0}}
+            "account": {"seed_sol": SEED_SOL, "realized_sol": 0.0},
+            "recent_stops": {}}
 
 
 def _save_state(s: dict):
@@ -210,6 +211,7 @@ class GraduationSniper:
     def __init__(self):
         self.trackers: dict[str, Tracker] = {}
         self.state = _load_state()
+        self.state.setdefault("recent_stops", {})
         self.pool = ThreadPoolExecutor(max_workers=6)
         self.brain = EdgeBrain()
         self.autotune = os.environ.get("EDGE_BRAIN_AUTOTUNE", "1") != "0"
@@ -316,7 +318,8 @@ class GraduationSniper:
                             continue
                         mint = msg.get("mint")
                         if mint and (mint in self.trackers
-                                     or mint in self.state["positions"]):
+                                     or mint in self.state["positions"]
+                                     or mint in self.state["recent_stops"]):
                             self._on_migration(mint)
             except Exception as e:
                 print(f"[GRAD] WS drop {type(e).__name__}: {str(e)[:80]} "
@@ -400,6 +403,12 @@ class GraduationSniper:
         net_pct = pnl / pos["size_sol"] * 100.0
         self.state["account"]["realized_sol"] = round(
             self.state["account"].get("realized_sol", 0.0) + pnl, 6)
+        # Whipsaw monitor: remember abandoned positions so we can log whether
+        # the token graduates after we bailed (the stop-tuning ground truth).
+        if reason in ("stall_stop", "timeout"):
+            self.state["recent_stops"][mint] = {
+                "symbol": pos["symbol"], "stop_ts": time.time(),
+                "pnl_sol": round(pnl, 5), "reason": reason}
         _save_state(self.state)
         hold = time.time() - pos["entry_ts"]
         _log({"event": "close", "mint": mint, "symbol": pos["symbol"],
@@ -437,6 +446,19 @@ class GraduationSniper:
         t = self.trackers.pop(mint, None)
         if t:
             print(f"[GRAD] {t.symbol} graduated — untracked", flush=True)
+        rs = self.state["recent_stops"].pop(mint, None)
+        if rs:
+            elapsed = round(time.time() - rs.get("stop_ts", 0), 0)
+            _log({"event": "post_stop_grad", "mint": mint,
+                  "symbol": rs.get("symbol", "?"),
+                  "stopped_pnl_sol": rs.get("pnl_sol"),
+                  "stop_reason": rs.get("reason"),
+                  "stop_to_grad_s": elapsed})
+            print(f"[GRAD] WHIPSAW {rs.get('symbol','?')} graduated "
+                  f"{elapsed:.0f}s after our {rs.get('reason')} "
+                  f"({rs.get('pnl_sol'):+.4f} SOL left on the table)",
+                  flush=True)
+            _save_state(self.state)
 
     # ---------------- management ----------------
     async def manage_loop(self):
@@ -464,6 +486,14 @@ class GraduationSniper:
                 if (now - t.last_change_ts > STALE_DROP_S
                         or t.real_sol < HOT_ZONE_MIN_SOL - 10):
                     del self.trackers[mint]
+            # Expire whipsaw-monitor entries after 24h (didn't graduate = a
+            # good stop; the absence of a post_stop_grad event is the label)
+            expired = [m for m, r in self.state["recent_stops"].items()
+                       if now - r.get("stop_ts", 0) > 86400]
+            if expired:
+                for m in expired:
+                    del self.state["recent_stops"][m]
+                _save_state(self.state)
             # Live snapshot for the dashboard's graduation radar
             try:
                 snap = {
