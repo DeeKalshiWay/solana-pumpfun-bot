@@ -43,6 +43,15 @@ TP_PCT = 15.0
 SL_PCT = 10.0
 HOLD_MAX_S = 600.0           # out by minute 10 after entry regardless
 FILL_COST_PCT = 1.5          # per side: pool fee + slippage estimate
+TX_FEE_SOL = 0.0007          # network base + priority fee per tx
+
+# Friction asymmetry rules (2026-07-17, operator directive):
+# - entries fill one poll AFTER the signal, at the moved price (a real buy
+#   chases the bounce it just detected)
+# - TP fills are CAPPED at the trigger price: you sell passing through
+#   +TP_PCT, you don't get credited a 5s gap spike (NOLAN "+51.7%" was
+#   this illusion)
+# - SL fills stay at the observed (gapped-down) price — losses keep gap risk
 
 # --- Ops ---------------------------------------------------------------------
 POLL_S = 5.0
@@ -114,22 +123,25 @@ class TailHolder:
         del self.watches[mint]
 
     def _open(self, mint: str, w: dict, px: float, flush: float,
-              bounce: float):
+              bounce: float, chase_pct: float):
         entry_px = px * (1 + FILL_COST_PCT / 100.0)
         w["pos"] = {"entry_px": entry_px, "entry_ts": time.time(),
-                    "tokens": SIZE_SOL / entry_px}
+                    "tokens": SIZE_SOL / entry_px, "fees_sol": TX_FEE_SOL}
         self._log({"event": "tail_open", "mint": mint, "symbol": w["symbol"],
                    "size_sol": SIZE_SOL, "entry_px": entry_px,
+                   "chase_pct": round(chase_pct, 2),
                    "flush_pct": round(flush, 1), "bounce_pct": round(bounce, 1),
                    "secs_after_grad": round(time.time() - w["t0"], 0),
                    "features": w["features"], "strategy": "graduation_tail"})
         print(f"[TAIL] OPEN {w['symbol']} after {flush:.0f}% flush / "
-              f"{bounce:.1f}% bounce, size {SIZE_SOL} SOL", flush=True)
+              f"{bounce:.1f}% bounce ({chase_pct:+.1f}% chased in flight), "
+              f"size {SIZE_SOL} SOL", flush=True)
 
     def _close(self, mint: str, w: dict, px: float, reason: str):
         pos = w["pos"]
         exit_px = px * (1 - FILL_COST_PCT / 100.0)
-        pnl = pos["tokens"] * exit_px - SIZE_SOL
+        fees = pos.get("fees_sol", 0.0) + TX_FEE_SOL
+        pnl = pos["tokens"] * exit_px - SIZE_SOL - fees
         net_pct = pnl / SIZE_SOL * 100.0
         tail = self.state.setdefault("tail", {"realized_sol": 0.0})
         tail["realized_sol"] = round(tail.get("realized_sol", 0.0) + pnl, 6)
@@ -162,17 +174,26 @@ class TailHolder:
         age = now - w["t0"]
 
         if w["pos"] is None:
+            pe = w.pop("pending_entry", None)
+            if pe is not None:
+                # tx was in flight for one poll — fill at the moved price
+                chase_pct = 100.0 * (px / pe["signal_px"] - 1.0)
+                self._open(mint, w, px, pe["flush"], pe["bounce"], chase_pct)
+                return
             flush = 100.0 * (w["baseline"] - w["low"]) / w["baseline"]
             bounce = 100.0 * (px - w["low"]) / w["low"] if w["low"] else 0.0
             if (age >= ENTRY_MIN_WAIT_S and flush >= FLUSH_MIN_PCT
                     and bounce >= BOUNCE_CONFIRM_PCT):
-                self._open(mint, w, px, flush, bounce)
+                w["pending_entry"] = {"signal_px": px, "flush": flush,
+                                      "bounce": bounce}
             elif age > ENTRY_WINDOW_S:
                 self._drop(mint, "no_setup", w)
         else:
             chg = 100.0 * (px - w["pos"]["entry_px"]) / w["pos"]["entry_px"]
             if chg >= TP_PCT:
-                self._close(mint, w, px, "take_profit")
+                # sell on the way through the trigger — no gap-spike credit
+                capped = w["pos"]["entry_px"] * (1 + TP_PCT / 100.0)
+                self._close(mint, w, min(px, capped), "take_profit")
             elif chg <= -SL_PCT:
                 self._close(mint, w, px, "stop_loss")
             elif now - w["pos"]["entry_ts"] > HOLD_MAX_S:

@@ -40,6 +40,9 @@ def main():
     bal = seed + realized
     print(f"\nBALANCE: {bal:.4f} SOL  (seed {seed:.2f}, realized {realized:+.4f})"
           f"  ≈ ${bal * 85:.2f}")
+    fees = acct.get("fees_sol", 0.0)
+    if fees:
+        print(f"  tx fees paid (friction model, incl. reverts): {fees:.4f} SOL")
     open_pos = state.get("positions", {})
     if open_pos:
         print(f"OPEN POSITIONS ({len(open_pos)}):")
@@ -52,6 +55,7 @@ def main():
     # Trades
     opens, closes, skips, whipsaws = [], [], [], []
     shadow, tail_opens, tail_closes, tail_passes = [], [], [], []
+    entry_fails = []
     if os.path.exists(TRADES):
         for line in open(TRADES, encoding="utf-8"):
             line = line.strip()
@@ -63,11 +67,13 @@ def main():
                 continue
             {"open": opens, "close": closes, "skip": skips,
              "post_stop_grad": whipsaws, "shadow_outcome": shadow,
+             "entry_fail": entry_fails,
              "tail_open": tail_opens, "tail_close": tail_closes,
              "tail_pass": tail_passes}.get(r.get("event"), []).append(r)
 
     print(f"\nTRADES: {len(opens)} opened, {len(closes)} closed, "
-          f"{len(skips)} skipped by filters/brain")
+          f"{len(skips)} skipped by filters/brain, "
+          f"{len(entry_fails)} buys reverted in flight")
 
     if closes:
         wins = [c for c in closes if (c.get("pnl_sol") or 0) > 0]

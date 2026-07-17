@@ -70,6 +70,20 @@ VIRTUAL_SOL_INIT = 30.0
 GRADUATION_REAL_SOL = 85.0
 FEE_PCT = 1.0
 
+# --- Real-life friction (2026-07-17, operator directive: replicate every
+# --- source of live friction — the copy-trading audit lesson) ----------------
+# Orders no longer fill at the observed curve state. A decision at poll T
+# fills at poll T+1 (~CURVE_POLL_S later) — models send->land latency on a
+# curve that moved while the tx was in flight. Consequences this correctly
+# reproduces: entries chase rising curves, the 84.5 exit can LOSE the race
+# to migration (falls back to the migration haircut), and 6-second wins
+# stop being free money.
+TX_FEE_SOL = 0.0007              # base + priority fee per SUBMITTED tx,
+                                 # charged on reverts too (p50-p75 guess for
+                                 # hot pump.fun mints; tune from live data)
+ENTRY_SLIPPAGE_BOUND_PCT = 2.0   # buy reverts if token price moved > this
+                                 # against us between decision and landing
+
 # --- Entry gates --------------------------------------------------------------
 ENTRY_REAL_SOL = 80.0            # brain-tunable within [80.0, 82.5]
 ENTRY_MAX_REAL_SOL = 84.5
@@ -219,8 +233,11 @@ def _log(rec: dict):
 class GraduationSniper:
     def __init__(self):
         self.trackers: dict[str, Tracker] = {}
+        # In-flight orders: decided at one poll, filled at the next
+        self.pending: dict[str, dict] = {}
         self.state = _load_state()
         self.state.setdefault("recent_stops", {})
+        self.state["account"].setdefault("fees_sol", 0.0)
         self.pool = ThreadPoolExecutor(max_workers=6)
         self.brain = EdgeBrain()
         self.state.setdefault("tail", {"realized_sol": 0.0})
@@ -306,10 +323,11 @@ class GraduationSniper:
                         return
                     t.on_poll(v_sol, v_tok)
                     self._maybe_shadow_snap(t)
+                    self._execute_pending(t)
                     if (mint in self.state["positions"]
                             and t.real_sol >= EXIT_REAL_SOL):
-                        self._close(mint, "pre_grad_exit", 0.0)
-                    else:
+                        self._place_sell(mint, "pre_grad_exit", 0.0)
+                    elif mint not in self.state["positions"]:
                         self._maybe_enter(t)
 
                 await asyncio.gather(*(poll_one(m) for m in mints))
@@ -378,7 +396,7 @@ class GraduationSniper:
     def _maybe_enter(self, t: Tracker):
         if os.path.exists(KILL_FILE):
             return
-        if t.mint in self.state["positions"]:
+        if t.mint in self.state["positions"] or t.mint in self.pending:
             return
         if len(self.state["positions"]) >= MAX_CONCURRENT:
             return
@@ -416,23 +434,83 @@ class GraduationSniper:
                 print(f"[GRAD] SKIP {t.symbol} — brain veto: {why}", flush=True)
             return
 
-        # ---- HONEST PAPER FILL ----
+        # ---- SUBMIT (friction model: fills at the NEXT poll, not now) ----
+        self.pending[t.mint] = {
+            "type": "buy", "decision_ts": time.time(),
+            "decision_price": t.v_sol / t.v_tok,
+            "decision_real_sol": rs,
+            "velocity": round(vel, 3), "buyers": steps,
+            "max_share": round(max_share, 3),
+        }
+
+    # ---------------- friction-model execution ----------------
+    def _charge_fee(self):
+        acct = self.state["account"]
+        acct["fees_sol"] = round(acct.get("fees_sol", 0.0) + TX_FEE_SOL, 6)
+
+    def _execute_pending(self, t: Tracker):
+        """Fill the order submitted at the previous poll against the curve
+        state observed NOW — the tx was in flight while the curve moved."""
+        order = self.pending.pop(t.mint, None)
+        if not order or order["type"] != "buy":
+            if order:  # pending sell — route through close at current state
+                self._close(t.mint, order["reason"], order["haircut"])
+            return
+        self._charge_fee()  # submitted txs pay the fee, filled or reverted
+        if len(self.state["positions"]) >= MAX_CONCURRENT:
+            return  # slot got taken while in flight; fee already paid
+        price_now = t.v_sol / t.v_tok
+        moved_pct = (price_now / order["decision_price"] - 1.0) * 100.0
+        if moved_pct > ENTRY_SLIPPAGE_BOUND_PCT:
+            acct = self.state["account"]
+            acct["realized_sol"] = round(
+                acct.get("realized_sol", 0.0) - TX_FEE_SOL, 6)
+            _save_state(self.state)
+            _log({"event": "entry_fail", "mint": t.mint, "symbol": t.symbol,
+                  "reason": "tx_revert_slippage",
+                  "moved_pct": round(moved_pct, 2),
+                  "fee_sol": TX_FEE_SOL,
+                  "real_sol": round(t.real_sol, 2)})
+            print(f"[GRAD] REVERT {t.symbol} buy — price moved "
+                  f"{moved_pct:+.1f}% in flight (fee {TX_FEE_SOL} SOL)",
+                  flush=True)
+            return
+        rs = t.real_sol
+        land_delay = time.time() - order["decision_ts"]
         tokens = buy_on_curve(t.v_sol, t.v_tok, SIZE_SOL)
         self.state["positions"][t.mint] = {
             "symbol": t.symbol, "creator": t.creator, "entry_ts": time.time(),
             "entry_v_sol": t.v_sol, "entry_real_sol": rs,
             "size_sol": SIZE_SOL, "tokens": tokens,
-            "entry_velocity": round(vel, 3),
-            "entry_buyers": steps, "entry_max_share": round(max_share, 3),
+            "fees_sol": TX_FEE_SOL,
+            "entry_velocity": order["velocity"],
+            "entry_buyers": order["buyers"],
+            "entry_max_share": order["max_share"],
         }
         _save_state(self.state)
         _log({"event": "open", "mint": t.mint, "symbol": t.symbol,
               "size_sol": SIZE_SOL, "tokens": tokens,
-              "real_sol": round(rs, 2), "velocity_5m": round(vel, 2),
-              "buyers": steps, "max_share": round(max_share, 2),
-              "fill": "honest_curve"})
+              "real_sol": round(rs, 2),
+              "quote_real_sol": order["decision_real_sol"],
+              "land_delay_s": round(land_delay, 1),
+              "moved_in_flight_pct": round(moved_pct, 2),
+              "velocity_5m": round(order["velocity"], 2),
+              "buyers": order["buyers"], "max_share": order["max_share"],
+              "fill": "honest_curve_delayed"})
         print(f"[GRAD] OPEN {t.symbol} ({t.mint[:8]}) at real_sol={rs:.2f} "
-              f"vel={vel:.1f}/5m steps={steps} size={SIZE_SOL} SOL", flush=True)
+              f"(quoted {order['decision_real_sol']:.2f}, "
+              f"{moved_pct:+.1f}% in flight) size={SIZE_SOL} SOL", flush=True)
+
+    def _place_sell(self, mint: str, reason: str, haircut_pct: float):
+        """Submit a sell — it lands at the next poll's curve state. If the
+        token migrates first, the migration path (with haircut) wins the
+        race, exactly like a live sell losing to graduation."""
+        cur = self.pending.get(mint)
+        if cur and cur["type"] == "sell":
+            return
+        self.pending[mint] = {"type": "sell", "reason": reason,
+                              "haircut": haircut_pct,
+                              "decision_ts": time.time()}
 
     def _close(self, mint: str, reason: str, haircut_pct: float):
         pos = self.state["positions"].pop(mint, None)
@@ -446,7 +524,9 @@ class GraduationSniper:
         else:
             gross = pos["size_sol"]
         net = gross * (1.0 - haircut_pct / 100.0)
-        pnl = max(-pos["size_sol"], net - pos["size_sol"])
+        self._charge_fee()  # the sell tx itself
+        fees = pos.get("fees_sol", 0.0) + TX_FEE_SOL
+        pnl = max(-(pos["size_sol"] + fees), net - pos["size_sol"] - fees)
         net_pct = pnl / pos["size_sol"] * 100.0
         self.state["account"]["realized_sol"] = round(
             self.state["account"].get("realized_sol", 0.0) + pnl, 6)
@@ -462,7 +542,7 @@ class GraduationSniper:
               "pnl_sol": round(pnl, 5), "net_pct": round(net_pct, 2),
               "exit_reason": reason, "hold_s": round(hold, 0),
               "exit_real_sol": round(v_sol - VIRTUAL_SOL_INIT, 2),
-              "haircut_pct": haircut_pct})
+              "haircut_pct": haircut_pct, "fees_sol": round(fees, 5)})
         bal = SEED_SOL + self.state["account"]["realized_sol"]
         print(f"[GRAD] CLOSE {pos['symbol']} {reason} pnl={pnl:+.4f} SOL "
               f"({net_pct:+.1f}%) hold={hold:.0f}s | balance={bal:.3f} SOL",
@@ -488,7 +568,18 @@ class GraduationSniper:
                   flush=True)
 
     def _on_migration(self, mint: str):
+        order = self.pending.pop(mint, None)
+        if order and order["type"] == "buy":
+            # buy tx landed after graduation -> reverted, fee still paid
+            self._charge_fee()
+            acct = self.state["account"]
+            acct["realized_sol"] = round(
+                acct.get("realized_sol", 0.0) - TX_FEE_SOL, 6)
+            _save_state(self.state)
+            _log({"event": "entry_fail", "mint": mint,
+                  "reason": "tx_revert_migrated", "fee_sol": TX_FEE_SOL})
         if mint in self.state["positions"]:
+            # covers open positions AND in-flight sells that lost the race
             self._close(mint, "migration", MIGRATION_HAIRCUT_PCT)
         t = self.trackers.pop(mint, None)
         if t:
@@ -534,16 +625,16 @@ class GraduationSniper:
                 t = self.trackers.get(mint)
                 dd = (pos["entry_v_sol"] - t.v_sol) if t else 0.0
                 if dd >= DISASTER_STOP_SOL:
-                    self._close(mint, "disaster_stop", STALL_HAIRCUT_PCT)
+                    self._place_sell(mint, "disaster_stop", STALL_HAIRCUT_PCT)
                 elif dd >= STALL_STOP_SOL:
                     since = pos.setdefault("underwater_since", now)
                     if now - since >= STALL_CONFIRM_S:
-                        self._close(mint, "stall_stop", STALL_HAIRCUT_PCT)
+                        self._place_sell(mint, "stall_stop", STALL_HAIRCUT_PCT)
                 else:
                     pos.pop("underwater_since", None)
                 if (mint in self.state["positions"]
                         and now - pos["entry_ts"] > TIMEOUT_MIN * 60):
-                    self._close(mint, "timeout", STALL_HAIRCUT_PCT)
+                    self._place_sell(mint, "timeout", STALL_HAIRCUT_PCT)
             for mint in list(self.trackers.keys()):
                 if mint in self.state["positions"]:
                     continue
@@ -554,6 +645,11 @@ class GraduationSniper:
                 elif now - t.last_change_ts > STALE_DROP_S:
                     self._shadow_outcome(t, "stalled")  # 30 min, no trades
                     del self.trackers[mint]
+            # Prune in-flight buys whose token left the tracked set
+            for mint in list(self.pending.keys()):
+                if (self.pending[mint]["type"] == "buy"
+                        and mint not in self.trackers):
+                    del self.pending[mint]
             # Expire whipsaw-monitor entries after 24h (didn't graduate = a
             # good stop; the absence of a post_stop_grad event is the label)
             expired = [m for m, r in self.state["recent_stops"].items()
