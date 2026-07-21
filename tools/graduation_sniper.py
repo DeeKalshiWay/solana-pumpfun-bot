@@ -101,6 +101,11 @@ ENTRY_MAX_AGE_H = 24.0           # zombie gate: median successful token fills
                                  # the curve in minutes (arXiv 2602.14860);
                                  # month-old tokens limping into the zone are
                                  # a different (bad) population
+# Creator-history gate (2026-07-21): the paper found creator identity
+# predictive late-curve, and the ecosystem's serial-rugger signature is
+# "many launches, zero graduations". Verified free endpoint: /coins?creator=
+CREATOR_SERIAL_MIN_COINS = 5     # this many prior launches with zero grads
+                                 # -> skip (serial launcher, no successes)
 # Old organic-climb thresholds — still used by the TAIL-HOLD cohort filter
 # (post-migration bounce needs holder breadth, a different thesis; its own
 # small sample is positive, so it keeps the strict definition)
@@ -153,6 +158,8 @@ COINS_URL = ("https://frontend-api-v3.pump.fun/coins"
              "?offset={offset}&limit=50&sort=last_trade_timestamp"
              "&order=DESC&includeNsfw=true")
 COIN_URL = "https://frontend-api-v3.pump.fun/coins/{mint}"
+CREATOR_URL = ("https://frontend-api-v3.pump.fun/coins"
+               "?offset=0&limit=50&creator={creator}")
 UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
       "Accept": "application/json"}
 
@@ -188,6 +195,13 @@ class Tracker:
         self.koth_ts = (coin.get("king_of_the_hill_timestamp") or 0) / 1000.0
         self.reply_count = coin.get("reply_count") or 0
         self.is_live = bool(coin.get("is_currently_live"))
+        # Creator history — loaded async after tracking starts (None=unknown)
+        self.creator_coins: int | None = None
+        self.creator_grads: int | None = None
+        # Zone dump/recovery telemetry (92% of tokens dump pre-grad per the
+        # research; recording whether/how deep to learn post-dump timing)
+        self.peak_v_sol = v_sol
+        self.max_dump_sol = 0.0
         self.v_sol = v_sol
         self.v_tok = v_tok
         self.first_seen = time.time()
@@ -210,6 +224,18 @@ class Tracker:
         if abs(delta) > 1e-9:
             self.intervals.append((time.time(), delta))
             self.last_change_ts = time.time()
+        if v_sol > self.peak_v_sol:
+            self.peak_v_sol = v_sol
+        else:
+            self.max_dump_sol = max(self.max_dump_sol,
+                                    self.peak_v_sol - v_sol)
+
+    @property
+    def dump_recovered(self) -> bool:
+        """A >=2 SOL flush happened and price is back near the peak —
+        the post-dump entry signature from the research sweep."""
+        return (self.max_dump_sol >= 2.0
+                and self.v_sol >= self.peak_v_sol - 0.5)
 
     def velocity(self, window_s: float) -> float:
         cutoff = time.time() - window_s
@@ -278,6 +304,7 @@ class GraduationSniper:
         self.autotune = os.environ.get("EDGE_BRAIN_AUTOTUNE", "1") != "0"
         self._hour_stats: dict[int, list] = {}
         self._hour_stats_ts = 0.0
+        self._creator_cache: dict[str, tuple[int, int]] = {}
         self.entry_real_sol = ENTRY_REAL_SOL
         self.velocity_floor = VELOCITY_FLOOR_SOL
 
@@ -303,7 +330,8 @@ class GraduationSniper:
                         mint = c.get("mint")
                         if (not mint or mint in self.trackers
                                 or c.get("complete")
-                                or c.get("pump_swap_pool")):
+                                or c.get("pump_swap_pool")
+                                or c.get("is_banned")):
                             continue
                         rs = (c.get("real_sol_reserves") or 0) / 1e9
                         if not (HOT_ZONE_MIN_SOL <= rs < GRADUATION_REAL_SOL):
@@ -323,6 +351,8 @@ class GraduationSniper:
                             v_sol=(c.get("virtual_sol_reserves") or 0) / 1e9,
                             v_tok=(c.get("virtual_token_reserves") or 0) / 1e6,
                             coin=c)
+                        asyncio.get_running_loop().create_task(
+                            self._load_creator_history(self.trackers[mint]))
                         print(f"[GRAD] tracking {c.get('symbol','?')} "
                               f"({mint[:8]}) real_sol={rs:.1f}", flush=True)
             except Exception as e:
@@ -421,6 +451,8 @@ class GraduationSniper:
             "koth_min": round((now - t.koth_ts) / 60.0, 1)
                         if t.koth_ts else None,
             "replies": t.reply_count, "live": t.is_live,
+            "creator_coins": t.creator_coins,
+            "creator_grads": t.creator_grads,
         }
 
     def _shadow_outcome(self, t: Tracker, outcome: str):
@@ -429,8 +461,37 @@ class GraduationSniper:
         _log({"event": "shadow_outcome", "mint": t.mint, "symbol": t.symbol,
               "outcome": outcome,
               "secs_to_outcome": round(time.time() - t.shadow_snap["ts"], 0),
+              "max_dump_sol": round(t.max_dump_sol, 2),
+              "dump_recovered": t.dump_recovered,
               "snap": t.shadow_snap})
         t.shadow_snap = None
+
+    # ---------------- creator history ----------------
+    async def _load_creator_history(self, t: Tracker):
+        """(prior launches, prior graduations) for the token's creator via
+        the free ?creator= endpoint. Cached per creator; None until loaded."""
+        if not t.creator:
+            return
+        cached = self._creator_cache.get(t.creator)
+        if cached:
+            t.creator_coins, t.creator_grads = cached
+            return
+        try:
+            coins = await asyncio.get_running_loop().run_in_executor(
+                self.pool, self._get_json,
+                CREATOR_URL.format(creator=t.creator))
+        except Exception:
+            return
+        if not isinstance(coins, list):
+            return
+        prior = [c for c in coins if c.get("mint") != t.mint]
+        grads = sum(1 for c in prior
+                    if c.get("complete") or c.get("pump_swap_pool")
+                    or c.get("raydium_pool"))
+        t.creator_coins, t.creator_grads = len(prior), grads
+        if len(self._creator_cache) > 500:
+            self._creator_cache.clear()
+        self._creator_cache[t.creator] = (len(prior), grads)
 
     # ---------------- hour filter ----------------
     def _hour_completion(self, hour: int) -> tuple[int, float]:
@@ -486,6 +547,19 @@ class GraduationSniper:
                 print(f"[GRAD] SKIP {t.symbol} — zombie: {age_h:.0f}h old",
                       flush=True)
             return
+        if (t.creator_coins is not None
+                and t.creator_coins >= CREATOR_SERIAL_MIN_COINS
+                and (t.creator_grads or 0) == 0):
+            if t.rejected_reason != "creator":
+                t.rejected_reason = "creator"
+                _log({"event": "skip", "mint": t.mint, "symbol": t.symbol,
+                      "reason": f"serial_creator {t.creator_coins} launches "
+                                f"0 grads",
+                      "real_sol": round(rs, 2)})
+                print(f"[GRAD] SKIP {t.symbol} — serial creator: "
+                      f"{t.creator_coins} launches, 0 graduations",
+                      flush=True)
+            return
         hour = time.gmtime().tm_hour
         n_h, rate_h = self._hour_completion(hour)
         if n_h >= HOUR_FILTER_MIN_N and rate_h < HOUR_FILTER_FLOOR:
@@ -535,6 +609,8 @@ class GraduationSniper:
             "decision_real_sol": rs,
             "velocity": round(vel, 3), "buyers": steps,
             "max_share": round(max_share, 3),
+            "max_dump_sol": round(t.max_dump_sol, 2),
+            "dump_recovered": t.dump_recovered,
         }
 
     # ---------------- friction-model execution ----------------
@@ -590,6 +666,10 @@ class GraduationSniper:
               "moved_in_flight_pct": round(moved_pct, 2),
               "velocity_5m": round(order["velocity"], 2),
               "buyers": order["buyers"], "max_share": order["max_share"],
+              "max_dump_sol": order.get("max_dump_sol"),
+              "dump_recovered": order.get("dump_recovered"),
+              "creator_coins": t.creator_coins,
+              "creator_grads": t.creator_grads,
               "fill": "honest_curve_delayed"})
         print(f"[GRAD] OPEN {t.symbol} ({t.mint[:8]}) at real_sol={rs:.2f} "
               f"(quoted {order['decision_real_sol']:.2f}, "
