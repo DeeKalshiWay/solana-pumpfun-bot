@@ -591,9 +591,17 @@ class GraduationSniper:
                 print(f"[GRAD] SKIP {t.symbol} — single-buyer push "
                       f"(max_share={max_share:.0%})", flush=True)
             return
+        brain_feats = {
+            "velocity_5m": vel, "max_share": max_share, "steps": steps,
+            "entry_real_sol": rs, "hour_utc": hour,
+            "age_min": (time.time() - t.created_ts) / 60.0
+                       if t.created_ts else None,
+            "replies": t.reply_count, "creator_grads": t.creator_grads,
+            "creator_coins": t.creator_coins,
+        }
         ok, why = self.brain.allows(mint=t.mint, creator=t.creator,
                                     entry_real_sol=rs, velocity=vel,
-                                    buyers=steps)
+                                    buyers=steps, features=brain_feats)
         if not ok:
             if t.rejected_reason != why:
                 t.rejected_reason = why

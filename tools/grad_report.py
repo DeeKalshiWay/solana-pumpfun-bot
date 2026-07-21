@@ -112,18 +112,13 @@ def main():
         print(f"  avg win {avg_w:+.1f}%   avg loss {avg_l:+.1f}%   "
               f"-> true break-even win rate {true_be:.0%}")
         try:
-            from tools.edge_brain import BREAKEVEN_WIN_RATE
-            drift = true_be - BREAKEVEN_WIN_RATE
-            if abs(drift) > 0.05:
-                verdict = ("UNDERSTATES risk - brain vetoes fire too late"
-                           if drift > 0 else
-                           "OVERSTATES risk - brain vetoes fire too early")
-                print(f"  [!] brain assumes {BREAKEVEN_WIN_RATE:.0%} "
-                      f"(drift {drift:+.0%}) - {verdict}. "
-                      f"Consider updating BREAKEVEN_WIN_RATE in edge_brain.py")
-            else:
-                print(f"  brain assumes {BREAKEVEN_WIN_RATE:.0%} - "
-                      f"within tolerance")
+            from tools.edge_brain import EdgeBrain
+            brain_be = EdgeBrain().breakeven()   # now derived, not hand-set
+            drift = true_be - brain_be
+            note = ("within tolerance" if abs(drift) <= 0.05 else
+                    "brain self-derives this each run — no manual update needed")
+            print(f"  brain's derived break-even {brain_be:.0%} "
+                  f"(drift {drift:+.0%}) - {note}")
         except Exception:
             pass
 
