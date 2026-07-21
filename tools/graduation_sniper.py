@@ -85,11 +85,25 @@ ENTRY_SLIPPAGE_BOUND_PCT = 2.0   # buy reverts if token price moved > this
                                  # against us between decision and landing
 
 # --- Entry gates --------------------------------------------------------------
+# 2026-07-21 REWIRE, validated on our own shadow dataset (n=298) after the
+# research sweep: arXiv 2602.14860's "fewer trades to a given SOL level =
+# higher graduation odds" replicates here — vel>=3 completes at 81-86%
+# (with hour filter) while our old many-small-buys "organic" gate selected
+# a 70% pool (wash-traded bait mimics organic climbs; real momentum is few
+# big buys). Old gate: steps>=5, max_share<=0.5, vel>=1.5.
 ENTRY_REAL_SOL = 80.0            # brain-tunable within [80.0, 82.5]
 ENTRY_MAX_REAL_SOL = 84.5
-VELOCITY_FLOOR_SOL = 1.5         # brain-tunable within [1.0, 3.0]
+VELOCITY_FLOOR_SOL = 3.0         # brain-tunable within [2.5, 8.0]
 VELOCITY_WINDOW_S = 300.0
 DIVERSITY_WINDOW_SOL = 3.0
+ENTRY_MAX_SHARE_CAP = 0.90       # only block near-total single-buyer pushes
+ENTRY_MAX_AGE_H = 24.0           # zombie gate: median successful token fills
+                                 # the curve in minutes (arXiv 2602.14860);
+                                 # month-old tokens limping into the zone are
+                                 # a different (bad) population
+# Old organic-climb thresholds — still used by the TAIL-HOLD cohort filter
+# (post-migration bounce needs holder breadth, a different thesis; its own
+# small sample is positive, so it keeps the strict definition)
 DIVERSITY_MIN_INTERVALS = 5      # distinct buy-intervals in the window
 BUNDLE_MAX_SHARE = 0.50          # max single-interval share of the window
 MIN_TRACK_SECONDS = 60.0
@@ -163,10 +177,17 @@ def sell_on_curve(v_sol: float, v_tok: float, tokens: float) -> float:
 # =============================================================================
 class Tracker:
     def __init__(self, mint: str, symbol: str, creator: str,
-                 v_sol: float, v_tok: float):
+                 v_sol: float, v_tok: float, coin: dict | None = None):
         self.mint = mint
         self.symbol = symbol
         self.creator = creator
+        # Free API signals (recorded into the shadow dataset; only age is
+        # gated on so far — the rest accumulate until our data judges them)
+        coin = coin or {}
+        self.created_ts = (coin.get("created_timestamp") or 0) / 1000.0
+        self.koth_ts = (coin.get("king_of_the_hill_timestamp") or 0) / 1000.0
+        self.reply_count = coin.get("reply_count") or 0
+        self.is_live = bool(coin.get("is_currently_live"))
         self.v_sol = v_sol
         self.v_tok = v_tok
         self.first_seen = time.time()
@@ -300,7 +321,8 @@ class GraduationSniper:
                         self.trackers[mint] = Tracker(
                             mint, c.get("symbol", "?"), c.get("creator", ""),
                             v_sol=(c.get("virtual_sol_reserves") or 0) / 1e9,
-                            v_tok=(c.get("virtual_token_reserves") or 0) / 1e6)
+                            v_tok=(c.get("virtual_token_reserves") or 0) / 1e6,
+                            coin=c)
                         print(f"[GRAD] tracking {c.get('symbol','?')} "
                               f"({mint[:8]}) real_sol={rs:.1f}", flush=True)
             except Exception as e:
@@ -388,11 +410,17 @@ class GraduationSniper:
         if time.time() - t.first_seen < MIN_TRACK_SECONDS:
             return
         steps, max_share = t.climb_quality()
+        now = time.time()
         t.shadow_snap = {
-            "ts": time.time(), "real_sol": round(rs, 2),
+            "ts": now, "real_sol": round(rs, 2),
             "velocity_5m": round(t.velocity(VELOCITY_WINDOW_S), 2),
             "steps": steps, "max_share": round(max_share, 2),
             "hour_utc": time.gmtime().tm_hour,
+            "age_min": round((now - t.created_ts) / 60.0, 1)
+                       if t.created_ts else None,
+            "koth_min": round((now - t.koth_ts) / 60.0, 1)
+                        if t.koth_ts else None,
+            "replies": t.reply_count, "live": t.is_live,
         }
 
     def _shadow_outcome(self, t: Tracker, outcome: str):
@@ -448,6 +476,16 @@ class GraduationSniper:
             return
         if time.time() - t.first_seen < MIN_TRACK_SECONDS:
             return
+        if t.created_ts and (time.time() - t.created_ts) > ENTRY_MAX_AGE_H * 3600:
+            if t.rejected_reason != "age":
+                t.rejected_reason = "age"
+                age_h = (time.time() - t.created_ts) / 3600
+                _log({"event": "skip", "mint": t.mint, "symbol": t.symbol,
+                      "reason": f"zombie_age {age_h:.0f}h",
+                      "real_sol": round(rs, 2)})
+                print(f"[GRAD] SKIP {t.symbol} — zombie: {age_h:.0f}h old",
+                      flush=True)
+            return
         hour = time.gmtime().tm_hour
         n_h, rate_h = self._hour_completion(hour)
         if n_h >= HOUR_FILTER_MIN_N and rate_h < HOUR_FILTER_FLOOR:
@@ -470,14 +508,14 @@ class GraduationSniper:
                       "real_sol": round(rs, 2)})
             return
         steps, max_share = t.climb_quality()
-        if steps < DIVERSITY_MIN_INTERVALS or max_share > BUNDLE_MAX_SHARE:
+        if max_share > ENTRY_MAX_SHARE_CAP:
             if t.rejected_reason != "bundle":
                 t.rejected_reason = "bundle"
                 _log({"event": "skip", "mint": t.mint, "symbol": t.symbol,
-                      "reason": f"climb steps={steps} max_share={max_share:.2f}",
+                      "reason": f"single_buyer_push max_share={max_share:.2f}",
                       "real_sol": round(rs, 2)})
-                print(f"[GRAD] SKIP {t.symbol} — bundle-ish climb "
-                      f"(steps={steps}, max_share={max_share:.0%})", flush=True)
+                print(f"[GRAD] SKIP {t.symbol} — single-buyer push "
+                      f"(max_share={max_share:.0%})", flush=True)
             return
         ok, why = self.brain.allows(mint=t.mint, creator=t.creator,
                                     entry_real_sol=rs, velocity=vel,
@@ -758,7 +796,7 @@ class GraduationSniper:
         print(f"Graduation sniper v2 (poll-tracking) | PAPER | "
               f"seed {SEED_SOL:.3f} SOL (balance {bal:.3f}) | "
               f"entry>={self.entry_real_sol} real SOL | "
-              f"vel>={self.velocity_floor}/5m | steps>={DIVERSITY_MIN_INTERVALS} | "
+              f"vel>={self.velocity_floor}/5m | max_share<={ENTRY_MAX_SHARE_CAP} | "
               f"size {SIZE_SOL} SOL x{MAX_CONCURRENT} | kill: {KILL_FILE}",
               flush=True)
         await asyncio.gather(

@@ -57,9 +57,11 @@ CREATOR_STRIKE_LIMIT = 2
 Z = 1.28                # ~80% one-sided confidence for the Wilson bound
 
 ENTRY_ARMS = [80.0, 81.0, 82.0]
-VELOCITY_ARMS = [1.0, 1.5, 2.5]
+# 2026-07-21: arms/bounds re-based around the new velocity floor (3.0) after
+# the shadow-data gate rewire — the old [1.0, 3.0] range is below the floor
+VELOCITY_ARMS = [3.0, 4.5, 6.0]
 ENTRY_BOUNDS = (80.0, 82.5)
-VELOCITY_BOUNDS = (1.0, 3.0)
+VELOCITY_BOUNDS = (2.5, 8.0)
 
 
 def _wilson_lb(wins: int, n: int, z: float = Z) -> float:
