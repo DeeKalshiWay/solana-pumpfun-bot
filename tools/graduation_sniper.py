@@ -115,6 +115,16 @@ MIGRATION_HAIRCUT_PCT = 2.0      # fallback: missed 84.5 and it migrated
 STALL_HAIRCUT_PCT = 2.0
 
 # --- Ops --------------------------------------------------------------------------
+# --- Hour filter (2026-07-21) -----------------------------------------------
+# Driven by our own shadow-completion dataset: completion rate by UTC hour
+# ranges 50%-100% (n=264 at ship time) while post-friction economics need
+# ~81% wins. Entries are blocked in hours that complete below the floor;
+# shadow snapshots keep collecting in blocked hours, so an hour that
+# improves un-blocks itself on the next refresh.
+HOUR_FILTER_MIN_N = 8            # shadow outcomes needed before an hour is judged
+HOUR_FILTER_FLOOR = 0.72         # block entries when the hour completes below this
+HOUR_STATS_REFRESH_S = 3600.0
+
 DISCOVERY_POLL_S = 20.0
 DISCOVERY_PAGES = 3
 HOT_ZONE_MIN_SOL = 65.0
@@ -245,6 +255,8 @@ class GraduationSniper:
                                save_fn=lambda: _save_state(self.state),
                                pool=self.pool)
         self.autotune = os.environ.get("EDGE_BRAIN_AUTOTUNE", "1") != "0"
+        self._hour_stats: dict[int, list] = {}
+        self._hour_stats_ts = 0.0
         self.entry_real_sol = ENTRY_REAL_SOL
         self.velocity_floor = VELOCITY_FLOOR_SOL
 
@@ -392,6 +404,37 @@ class GraduationSniper:
               "snap": t.shadow_snap})
         t.shadow_snap = None
 
+    # ---------------- hour filter ----------------
+    def _hour_completion(self, hour: int) -> tuple[int, float]:
+        """(n, completion rate) for a UTC hour from our shadow dataset,
+        recomputed from the trades log at most once per hour."""
+        now = time.time()
+        if now - self._hour_stats_ts > HOUR_STATS_REFRESH_S:
+            stats: dict[int, list] = {}
+            try:
+                with open(TRADES_LOG, encoding="utf-8") as f:
+                    for line in f:
+                        if '"shadow_outcome"' not in line:
+                            continue
+                        try:
+                            r = json.loads(line)
+                        except Exception:
+                            continue
+                        h = (r.get("snap") or {}).get("hour_utc")
+                        if h is None:
+                            continue
+                        d = stats.setdefault(int(h), [0, 0])
+                        d[0] += 1
+                        d[1] += int(r.get("outcome") == "graduated")
+            except OSError:
+                pass
+            self._hour_stats = stats
+            self._hour_stats_ts = now
+        d = self._hour_stats.get(hour)
+        if not d or d[0] == 0:
+            return 0, 1.0
+        return d[0], d[1] / d[0]
+
     # ---------------- strategy ----------------
     def _maybe_enter(self, t: Tracker):
         if os.path.exists(KILL_FILE):
@@ -404,6 +447,19 @@ class GraduationSniper:
         if not (self.entry_real_sol <= rs < ENTRY_MAX_REAL_SOL):
             return
         if time.time() - t.first_seen < MIN_TRACK_SECONDS:
+            return
+        hour = time.gmtime().tm_hour
+        n_h, rate_h = self._hour_completion(hour)
+        if n_h >= HOUR_FILTER_MIN_N and rate_h < HOUR_FILTER_FLOOR:
+            if t.rejected_reason != "hour":
+                t.rejected_reason = "hour"
+                _log({"event": "skip", "mint": t.mint, "symbol": t.symbol,
+                      "reason": f"hour_filter:{hour:02d}utc"
+                                f"(rate={rate_h:.0%},n={n_h})",
+                      "real_sol": round(rs, 2)})
+                print(f"[GRAD] SKIP {t.symbol} — hour filter: {hour:02d}:00 "
+                      f"UTC completes {rate_h:.0%} (n={n_h}) < "
+                      f"{HOUR_FILTER_FLOOR:.0%}", flush=True)
             return
         vel = t.velocity(VELOCITY_WINDOW_S)
         if vel < self.velocity_floor:

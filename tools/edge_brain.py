@@ -46,10 +46,11 @@ BRAIN_FILE = os.path.join(ROOT, "logs", "edge_brain.json")
 JOURNAL = os.path.join(ROOT, "logs", "edge_brain_journal.jsonl")
 
 # Break-even win rate for the graduation trade. 0.645 was derived from the
-# original 1.5-SOL stop (+3.82% win / -6.94% loss); updated 2026-07-17 when
-# grad_report's drift check fired: realized last-20 economics under the
-# persistence/disaster stops are +4.3% win / -10.7% loss -> 71%.
-BREAKEVEN_WIN_RATE = 0.71
+# original 1.5-SOL stop (+3.82% win / -6.94% loss); 0.71 on 2026-07-17 from
+# realized stop-redesign economics; 0.81 on 2026-07-21 after the friction
+# model compressed wins to +2.7% avg vs -11.3% avg loss (drift check fired
+# twice). Post-friction numbers are the ones that matter.
+BREAKEVEN_WIN_RATE = 0.81
 MIN_N_VETO = 8          # min samples in a bucket before it can be vetoed
 MIN_N_ARM = 15          # min samples per arm before autotune trusts it
 CREATOR_STRIKE_LIMIT = 2
