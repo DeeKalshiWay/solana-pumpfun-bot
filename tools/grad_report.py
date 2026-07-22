@@ -89,6 +89,25 @@ def main():
         print("  by exit reason:")
         for r, (n, pnl) in sorted(by_reason.items()):
             print(f"    {r:<15} n={n:>3}  pnl={pnl:+.4f} SOL")
+        # Era split — the 2026-07-22 scalp rewire changed the exit structure,
+        # so pooling its trades with the pre-rewire book hides exactly the
+        # comparison the rewire is a bet on (see Trigger 6).
+        eras: dict = {}
+        for c in closes:
+            eras.setdefault(c.get("era", "pre_scalp"), []).append(c)
+        if len(eras) > 1:
+            print("\n  BY CONFIG ERA:")
+            for era, cs in sorted(eras.items(),
+                                  key=lambda kv: min(c.get("ts", 0)
+                                                     for c in kv[1])):
+                w = [c for c in cs if (c.get("pnl_sol") or 0) > 0]
+                net = sum(c.get("pnl_sol") or 0 for c in cs)
+                mig = sum(1 for c in cs
+                          if c.get("exit_reason") == "migration")
+                print(f"    {era:<12} n={len(cs):>3}  "
+                      f"wins={len(w)}/{len(cs)} "
+                      f"({len(w)/len(cs)*100:.0f}%)  net={net:+.4f} SOL  "
+                      f"migration-leak={mig/len(cs)*100:.0f}%")
         print("\n  last 10 closes:")
         for c in closes[-10:]:
             ts = time.strftime("%m-%d %H:%M", time.localtime(c.get("ts", 0)))

@@ -15,9 +15,15 @@ Data sources — 100% free, all VERIFIED working 2026-07-04:
   - Exits:     PumpPortal wss subscribeMigration (still free) + the
     poll-based real_sol >= EXIT_REAL_SOL trigger
 
-Thesis (arXiv 2602.14860, n=655,770 tokens): above ~80 real SOL raised with
-positive velocity, graduation at ~85 SOL is mechanically near-certain. Buy
-the last stretch, sell on-curve just before migration.
+Thesis, REVISED 2026-07-22 after the 54-trade readout. The original thesis
+(arXiv 2602.14860, n=655,770 tokens) was that above ~80 real SOL raised with
+positive velocity, graduation at ~85 SOL is mechanically near-certain — so buy
+the last stretch and ride it through migration. The completion half replicated
+(88% of the mints we entered graduated) but the trade half did NOT: holding to
+migration won 3 of 16 and lost money, while scalping out before graduation won
+15 of 19 and made money. Graduation is not the payday; the last stretch of the
+curve is. This is now a pure on-curve scalp — enter with a mandatory runway to
+the exit, sell into the climb, and never deliberately hold to migration.
 
 Entry gates (all must pass):
   - real SOL raised in [entry_real_sol, ENTRY_MAX_REAL_SOL)
@@ -29,8 +35,11 @@ Entry gates (all must pass):
     which the free APIs no longer expose per-trade)
   - >= MIN_TRACK_SECONDS of observed history
 
-Exits: curve-sell at EXIT_REAL_SOL (primary, +3.8%/win verified); migration
-event (fallback); stall-stop; timeout.
+Exits: curve-sell at EXIT_REAL_SOL (primary, and the only intended one — it
+sits MIN_RUNWAY_SOL clear of graduation so the scalp wins the race); migration
+event (a MISS, taken at a haircut, not a plan); disaster-stop; timeout. The
+stall-stop is disabled — see the scalp-band block for the readout that killed
+it.
 
 Fills are HONEST: constant-product math including our own price impact and
 pump.fun's 1% fee each way.
@@ -57,6 +66,7 @@ from concurrent.futures import ThreadPoolExecutor
 import websockets
 
 from tools.edge_brain import EdgeBrain
+from tools.grad_alerts import GradAlerts
 from tools.grad_tail import TailHolder
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -91,8 +101,10 @@ ENTRY_SLIPPAGE_BOUND_PCT = 2.0   # buy reverts if token price moved > this
 # (with hour filter) while our old many-small-buys "organic" gate selected
 # a 70% pool (wash-traded bait mimics organic climbs; real momentum is few
 # big buys). Old gate: steps>=5, max_share<=0.5, vel>=1.5.
-ENTRY_REAL_SOL = 80.0            # brain-tunable within [80.0, 82.5]
-ENTRY_MAX_REAL_SOL = 84.5
+ENTRY_REAL_SOL = 80.0            # brain-tunable within [80.0, ENTRY_MAX_REAL_SOL]
+# ENTRY_MAX_REAL_SOL is DERIVED from the exit — see the scalp-band block below.
+# It is never a free parameter: an entry with less than MIN_RUNWAY_SOL of curve
+# between it and the exit cannot clear the round-trip fee, so it is not a trade.
 VELOCITY_FLOOR_SOL = 3.0         # brain-tunable within [2.5, 8.0]
 VELOCITY_WINDOW_S = 300.0
 DIVERSITY_WINDOW_SOL = 3.0
@@ -116,22 +128,92 @@ MIN_TRACK_SECONDS = 60.0
 # --- Position management --------------------------------------------------------
 SIZE_SOL = 0.25
 MAX_CONCURRENT = 2
-# 2026-07-16 stop redesign. First 20-trade readout: 9/13 stall-stops later
-# graduated (the 1.5 stop sold routine late-curve dips), and MASKTABLE then
-# gapped 4.2 SOL through a widened 3.0 stop and recovered within ~3 min —
-# flushes are fast and deep, so ANY stop that reacts inside the flush sells
-# every whipsaw at the low. The stall-stop now requires the drawdown to
-# PERSIST (dead tokens stay down; whipsaws recover in 2-3 min); only a
-# disaster-depth flush exits immediately. Timeout remains the final backstop.
-STALL_STOP_SOL = 3.0             # underwater threshold (vs entry v_sol)...
-STALL_CONFIRM_S = 300.0          # ...that must persist this long to fire
-DISASTER_STOP_SOL = 8.0          # unconditional exit — thesis broken
-TIMEOUT_MIN = 15.0
-# PRIMARY exit: curve-sell just before graduation. +3.82%/win vs -6.94%/stall
-# verified in the 2026-06-06 unit test; EV positive above ~65% completion.
-EXIT_REAL_SOL = 84.5
-MIGRATION_HAIRCUT_PCT = 2.0      # fallback: missed 84.5 and it migrated
+
+# =============================================================================
+# 2026-07-22 SCALP-ONLY REWIRE (operator directive after the 54-trade readout)
+# =============================================================================
+# The book was -0.7678 SOL over 54 trades at a 33% win rate. The diagnosis is
+# NOT entry quality — of the entered mints with a known outcome, 30/34 (88%)
+# went on to graduate, well above the 71% shadow-population rate. The entry
+# gates work. Every SOL of the loss came from the exit/stop structure:
+#
+#   exit reason      n   wins   net SOL
+#   pre_grad_exit   19   15     +0.108     <- the only thing that made money
+#   migration       16    3     -0.088     <- the "thesis played out" branch
+#   stall_stop      15    0     -0.343     <- pure loss, zero wins
+#   disaster_stop    5    0     -0.457     <- 1 trade (Jimothy) was -0.234
+#
+# Three structural defects, all fixed in this block:
+#
+# 1. NO RUNWAY GATE — the big one. ENTRY_MAX_REAL_SOL was 84.5, identical to
+#    EXIT_REAL_SOL, so nothing stopped an entry from being opened with no room
+#    left to profit. pump.fun charges 1% each way, so a SIZE_SOL scalp needs
+#    ~1.7 SOL of curve advance just to break even. 11 of 55 entries (20%) were
+#    opened INSIDE that dead band and were mathematically incapable of profit
+#    at the moment of entry — FOXGAR opened at 84.31 with 0.19 SOL of runway.
+#    Entry max is now DERIVED from the exit, so this cannot regress.
+#
+# 2. THE STALL STOP WAS PURE LOSS. 15 fires, 0 wins, -0.343 SOL. It sold
+#    routine late-curve dips at ~-2% on tokens that overwhelmingly went on to
+#    graduate (the whipsaw monitor caught 2 of 7 tagged stops graduating after
+#    we bailed, and PLEROMA survived a 13.45 SOL dump to migrate anyway).
+#    Disabled. The disaster stop caught all 4 genuine deaths on its own; that
+#    is where real risk control lives.
+#
+# 3. HOLDING TO MIGRATION IS THE LOSING BRANCH. The exit sat 0.5 SOL below
+#    graduation, so 16 of the 35 non-stopped trades lost the race to migration
+#    and took the haircut instead of the scalp. The exit now sits
+#    MIN_RUNWAY_SOL clear of graduation — the scalp wins the race by design.
+#
+# Modelled EV per trade at these settings (p(reach exit)=0.88, death rate 7%,
+# death loss capped at the observed ex-tail -22%): approximately +1.9%. That is
+# a thin edge, not a fat one, and it is a MODEL — the paper book is what
+# decides. See tests/test_graduation_scalp.py for the invariants.
+STALL_STOP_ENABLED = False       # defect 2 — see above. Constants kept so the
+STALL_STOP_SOL = 3.0             # whipsaw monitor and the report stay readable
+STALL_CONFIRM_S = 300.0          # and so re-enabling is a one-line change.
+DISASTER_STOP_SOL = 5.0          # tightened 8.0 -> 5.0: the tail is what makes
+                                 # this strategy negative-EV. Jimothy alone
+                                 # (-93.5%) cost 18 winning scalps. Whipsaw
+                                 # cost is accepted in exchange for the cap.
+TIMEOUT_MIN = 8.0                # a scalp that has not covered MIN_RUNWAY_SOL
+                                 # at vel>=3 SOL/5min is not working; 15 min
+                                 # was long enough to sit through a full cycle.
+
+# --- The scalp band ---------------------------------------------------------
+# Round-trip cost is 2% of notional (1% pump.fun fee each way) plus 2 tx fees.
+# Measured against the curve, break-even needs ~1.70 SOL of advance and it is
+# near-constant across the band (1.68 SOL at an 80.0 entry, 1.71 at 82.5) — the
+# fee dominates, so a "runway" gate is the right shape of gate.
+#
+# MIN_RUNWAY_SOL is set at 2.5, not at break-even, because a break-even-plus-
+# epsilon trade is not worth taking: at a 7% death rate and the observed
+# ex-tail death loss of -22%, a scalp must net ~+1.4% just to carry its share
+# of the deaths. 2.0 was tried first and rejected — it admitted entries netting
+# +0.54%, which is EV-negative against that death rate. Net at the worst
+# allowed entry is now +1.44%, rising to +3.31% at the bottom of the band.
+#
+# Cost of the tighter gate: the band narrows to [80.0, 81.0), which held 35% of
+# historical entries. Acceptable — 45% of all decision-zone observations occur
+# inside it, because tokens are first SEEN entering the zone near 80.
+EXIT_REAL_SOL = 83.5             # PRIMARY exit: curve-sell, never hold to grad
+MIN_RUNWAY_SOL = 2.5             # required curve between entry and exit
+ENTRY_MAX_REAL_SOL = EXIT_REAL_SOL - MIN_RUNWAY_SOL      # = 81.0, derived
+MIGRATION_HAIRCUT_PCT = 2.0      # fallback: lost the race and it migrated
 STALL_HAIRCUT_PCT = 2.0
+
+# The shadow dataset's decision zone is deliberately NOT narrowed with the
+# entry band — the 411-example completion dataset is only comparable across
+# re-tunes if the zone definition stays fixed. Shadow snapshots keep sampling
+# the original [80.0, 84.5) zone even though we now only trade [80.0, 81.5).
+SHADOW_ZONE_MAX_REAL_SOL = 84.5
+
+# Stamped onto every open/close so the next readout can separate scalp-era
+# trades from the 54 old-structure ones already in the log. Without this the
+# before/after comparison the rewire is a bet on cannot be made cleanly —
+# stall_stop and no-runway entries simply stop existing, which would silently
+# flatter any pooled statistic. Bump this on any future structural change.
+STRATEGY_ERA = "scalp_v3"
 
 # --- Ops --------------------------------------------------------------------------
 # --- Hour filter (2026-07-21) -----------------------------------------------
@@ -151,6 +233,13 @@ MAX_TRACKED = 12                 # per-mint polling — keep the fan-in modest
 CURVE_POLL_S = 3.0               # per-mint curve state refresh
 STALE_DROP_S = 1800.0
 MANAGE_TICK_S = 5.0
+SELL_ORPHAN_S = 30.0             # a submitted sell should fill at the next
+                                 # curve poll (~CURVE_POLL_S). If it is still
+                                 # pending after this long the mint's poll is
+                                 # failing — force the close from manage_loop
+                                 # against last-known curve state rather than
+                                 # hold an unbounded position. See the
+                                 # orphaned-sell backstop in manage_loop.
 SEED_SOL = 5.0                   # operator-set 2026-07-04: clean 5 SOL book
 
 PUMPPORTAL_WS = "wss://pumpportal.fun/api/data"
@@ -280,8 +369,30 @@ def _save_state(s: dict):
 def _log(rec: dict):
     rec.setdefault("ts", time.time())
     rec.setdefault("strategy", "graduation_sniper")
+    if rec.get("event") in ("open", "close", "skip", "entry_fail"):
+        rec.setdefault("era", STRATEGY_ERA)
     with open(TRADES_LOG, "a", encoding="utf-8") as f:
         f.write(json.dumps(rec) + "\n")
+
+
+def _read_closes() -> list:
+    """Every close record on disk. Only called when the daily digest fires —
+    never on the manage tick."""
+    out = []
+    try:
+        with open(TRADES_LOG, encoding="utf-8") as f:
+            for line in f:
+                if '"close"' not in line:
+                    continue
+                try:
+                    r = json.loads(line)
+                except Exception:
+                    continue
+                if r.get("event") == "close":
+                    out.append(r)
+    except OSError:
+        pass
+    return out
 
 
 # =============================================================================
@@ -307,6 +418,7 @@ class GraduationSniper:
         self._creator_cache: dict[str, tuple[int, int]] = {}
         self.entry_real_sol = ENTRY_REAL_SOL
         self.velocity_floor = VELOCITY_FLOOR_SOL
+        self.alerts = GradAlerts()
 
     # ---------------- HTTP helpers (run in executor) ----------------
     def _get_json(self, url: str):
@@ -355,6 +467,7 @@ class GraduationSniper:
                             self._load_creator_history(self.trackers[mint]))
                         print(f"[GRAD] tracking {c.get('symbol','?')} "
                               f"({mint[:8]}) real_sol={rs:.1f}", flush=True)
+                        self.alerts.note_discovery()   # dead-man: discovery ok
             except Exception as e:
                 print(f"[GRAD] discovery error {type(e).__name__}: "
                       f"{str(e)[:100]}", flush=True)
@@ -386,6 +499,7 @@ class GraduationSniper:
                     if v_sol <= 0 or v_tok <= 0:
                         return
                     t.on_poll(v_sol, v_tok)
+                    self.alerts.note_poll()     # dead-man: the feed answered
                     self._maybe_shadow_snap(t)
                     self._execute_pending(t)
                     if (mint in self.state["positions"]
@@ -435,7 +549,7 @@ class GraduationSniper:
         if t.shadow_snap is not None:
             return
         rs = t.real_sol
-        if not (80.0 <= rs < ENTRY_MAX_REAL_SOL):
+        if not (80.0 <= rs < SHADOW_ZONE_MAX_REAL_SOL):
             return
         if time.time() - t.first_seen < MIN_TRACK_SECONDS:
             return
@@ -524,6 +638,14 @@ class GraduationSniper:
             return 0, 1.0
         return d[0], d[1] / d[0]
 
+    def _shadow_rate_str(self) -> str:
+        """Population completion rate across all hours, for the daily digest.
+        Reuses the hour-stats cache — no extra file read."""
+        self._hour_completion(0)          # ensure the cache is warm
+        n = sum(d[0] for d in self._hour_stats.values())
+        g = sum(d[1] for d in self._hour_stats.values())
+        return f"{g}/{n} ({g / n:.0%})" if n else "no data"
+
     # ---------------- strategy ----------------
     def _maybe_enter(self, t: Tracker):
         if os.path.exists(KILL_FILE):
@@ -533,7 +655,23 @@ class GraduationSniper:
         if len(self.state["positions"]) >= MAX_CONCURRENT:
             return
         rs = t.real_sol
-        if not (self.entry_real_sol <= rs < ENTRY_MAX_REAL_SOL):
+        if rs < self.entry_real_sol:
+            return          # still climbing into the zone — not a rejection
+        # Past this point the token is in the zone and WILL be judged (entered
+        # or skipped). That is the signal the dead-man watches: tokens tracked
+        # but never judged means the pipeline stalled, which is invisible to a
+        # process watchdog.
+        self.alerts.note_decision()
+        if rs >= ENTRY_MAX_REAL_SOL:
+            # Defect 1: too far up the curve for the scalp to clear its own
+            # round-trip fee. Logged (it used to return silently, which is why
+            # 20% of entries were opened into a guaranteed loss unnoticed).
+            if t.rejected_reason != "no_runway":
+                t.rejected_reason = "no_runway"
+                _log({"event": "skip", "mint": t.mint, "symbol": t.symbol,
+                      "reason": f"no_runway {EXIT_REAL_SOL - rs:.2f}"
+                                f"<{MIN_RUNWAY_SOL} SOL to exit",
+                      "real_sol": round(rs, 2)})
             return
         if time.time() - t.first_seen < MIN_TRACK_SECONDS:
             return
@@ -682,6 +820,8 @@ class GraduationSniper:
         print(f"[GRAD] OPEN {t.symbol} ({t.mint[:8]}) at real_sol={rs:.2f} "
               f"(quoted {order['decision_real_sol']:.2f}, "
               f"{moved_pct:+.1f}% in flight) size={SIZE_SOL} SOL", flush=True)
+        self.alerts.on_open(t.symbol, t.mint, rs, SIZE_SOL,
+                            order["velocity"], EXIT_REAL_SOL - rs)
 
     def _place_sell(self, mint: str, reason: str, haircut_pct: float):
         """Submit a sell — it lands at the next poll's curve state. If the
@@ -729,6 +869,7 @@ class GraduationSniper:
         print(f"[GRAD] CLOSE {pos['symbol']} {reason} pnl={pnl:+.4f} SOL "
               f"({net_pct:+.1f}%) hold={hold:.0f}s | balance={bal:.3f} SOL",
               flush=True)
+        self.alerts.on_close(pos["symbol"], reason, pnl, net_pct, hold, bal)
         try:
             self.brain.record(
                 mint=mint, creator=pos.get("creator", ""),
@@ -739,7 +880,12 @@ class GraduationSniper:
             if self.autotune:
                 sugg = self.brain.suggest_params()
                 if "entry_real_sol" in sugg:
-                    self.entry_real_sol = sugg["entry_real_sol"]["value"]
+                    # Clamp below the derived runway ceiling. edge_brain's
+                    # ENTRY_BOUNDS top out at 82.5, above ENTRY_MAX_REAL_SOL
+                    # (81.5) — an unclamped suggestion would raise the entry
+                    # floor above the ceiling and silently freeze all trading.
+                    self.entry_real_sol = min(sugg["entry_real_sol"]["value"],
+                                              ENTRY_MAX_REAL_SOL - 0.5)
                 if "velocity_floor" in sugg:
                     self.velocity_floor = sugg["velocity_floor"]["value"]
                 if sugg:
@@ -788,6 +934,8 @@ class GraduationSniper:
                   f"{elapsed:.0f}s after our {rs.get('reason')} "
                   f"({rs.get('pnl_sol'):+.4f} SOL left on the table)",
                   flush=True)
+            self.alerts.on_whipsaw(rs.get("symbol", "?"), rs.get("reason", "?"),
+                                   elapsed, rs.get("pnl_sol") or 0.0)
             _save_state(self.state)
 
     # ---------------- management ----------------
@@ -801,6 +949,8 @@ class GraduationSniper:
                 for mint in list(self.state["positions"].keys()):
                     self._close(mint, "kill_switch", STALL_HAIRCUT_PCT)
                 _save_state(self.state)
+                self.alerts.on_kill(
+                    SEED_SOL + self.state["account"].get("realized_sol", 0.0))
                 raise SystemExit(0)
             for mint in list(self.state["positions"].keys()):
                 pos = self.state["positions"][mint]
@@ -808,7 +958,7 @@ class GraduationSniper:
                 dd = (pos["entry_v_sol"] - t.v_sol) if t else 0.0
                 if dd >= DISASTER_STOP_SOL:
                     self._place_sell(mint, "disaster_stop", STALL_HAIRCUT_PCT)
-                elif dd >= STALL_STOP_SOL:
+                elif STALL_STOP_ENABLED and dd >= STALL_STOP_SOL:
                     since = pos.setdefault("underwater_since", now)
                     if now - since >= STALL_CONFIRM_S:
                         self._place_sell(mint, "stall_stop", STALL_HAIRCUT_PCT)
@@ -817,6 +967,26 @@ class GraduationSniper:
                 if (mint in self.state["positions"]
                         and now - pos["entry_ts"] > TIMEOUT_MIN * 60):
                     self._place_sell(mint, "timeout", STALL_HAIRCUT_PCT)
+                # Orphaned-sell backstop. _execute_pending only runs from
+                # curve_poll_loop, so a sell placed against a mint whose poll
+                # is failing (API error, non-dict body, v_sol<=0) would sit in
+                # self.pending forever — _place_sell early-returns on an
+                # existing sell, so it never retries. PLEROMA hung this way for
+                # 3782s through a 13.45 SOL drawdown with BOTH an 8 SOL
+                # disaster stop and a 15-min timeout armed, and only closed
+                # when it migrated. It got lucky at -2.27%; a rug would have
+                # been -100%. Force the close here once the order is overdue.
+                order = self.pending.get(mint)
+                if (order and order["type"] == "sell"
+                        and now - order["decision_ts"] > SELL_ORPHAN_S):
+                    self.pending.pop(mint, None)
+                    age = now - order["decision_ts"]
+                    print(f"[GRAD] orphaned sell for {pos['symbol']} "
+                          f"({order['reason']}) — forcing close after "
+                          f"{age:.0f}s", flush=True)
+                    self.alerts.on_orphaned_sell(pos["symbol"],
+                                                 order["reason"], age)
+                    self._close(mint, order["reason"], order["haircut"])
             for mint in list(self.trackers.keys()):
                 if mint in self.state["positions"]:
                     continue
@@ -866,6 +1036,23 @@ class GraduationSniper:
                 os.replace(tmp, LIVE_SNAPSHOT)
             except Exception:
                 pass
+            # Dead-man + daily digest (Trigger 5). Both swallow their own
+            # errors internally; wrapped anyway so alerting can never stop
+            # position management from running.
+            try:
+                self.alerts.check_dead_man(tracked=len(self.trackers), now=now)
+                self.alerts.maybe_digest(
+                    now=now,
+                    balance=SEED_SOL + self.state["account"].get(
+                        "realized_sol", 0.0),
+                    seed=SEED_SOL, closes_fn=_read_closes,
+                    shadow_rate_fn=self._shadow_rate_str,
+                    tail_sol=self.state.get("tail", {}).get(
+                        "realized_sol", 0.0),
+                    open_positions=len(self.state["positions"]))
+            except Exception as e:
+                print(f"[GRAD] alert error: {type(e).__name__}: {str(e)[:80]}",
+                      flush=True)
             if now - last_heartbeat > 60:
                 bal = SEED_SOL + self.state["account"].get("realized_sol", 0.0)
                 hot = sorted((t for t in self.trackers.values()),
@@ -881,12 +1068,18 @@ class GraduationSniper:
 
     async def run(self):
         bal = SEED_SOL + self.state["account"].get("realized_sol", 0.0)
-        print(f"Graduation sniper v2 (poll-tracking) | PAPER | "
+        print(f"Graduation sniper v3 (SCALP-ONLY) | PAPER | "
               f"seed {SEED_SOL:.3f} SOL (balance {bal:.3f}) | "
-              f"entry>={self.entry_real_sol} real SOL | "
+              f"scalp band [{self.entry_real_sol}, {ENTRY_MAX_REAL_SOL}) "
+              f"-> exit {EXIT_REAL_SOL} (runway >={MIN_RUNWAY_SOL} SOL) | "
               f"vel>={self.velocity_floor}/5m | max_share<={ENTRY_MAX_SHARE_CAP} | "
-              f"size {SIZE_SOL} SOL x{MAX_CONCURRENT} | kill: {KILL_FILE}",
+              f"size {SIZE_SOL} SOL x{MAX_CONCURRENT} | "
+              f"stall_stop={'on' if STALL_STOP_ENABLED else 'OFF'} "
+              f"disaster={DISASTER_STOP_SOL} | kill: {KILL_FILE}",
               flush=True)
+        self.alerts.on_start(balance=bal, entry_lo=self.entry_real_sol,
+                             entry_hi=ENTRY_MAX_REAL_SOL,
+                             exit_at=EXIT_REAL_SOL)
         await asyncio.gather(
             self.discovery_loop(),
             self.curve_poll_loop(),
