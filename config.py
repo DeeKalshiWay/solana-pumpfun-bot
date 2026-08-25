@@ -61,6 +61,13 @@ def _env_json(name: str, default):
 PAPER_TRADING       = _env_bool("PAPER_TRADING", True)   # Safe default: paper.
                                                           # Set PAPER_TRADING=false in
                                                           # .env to enable real-money trading.
+# 2026-08-25 Wells Desk audit: every backtest config in analytics/backtest.md
+# is negative EV. Live concentration: top ticker = 102% of PnL. This flag
+# refuses to honor PAPER_TRADING=false until a held-out run clears go_live_gate
+# AND top-1 ticker share < 25%. Removing it is how you lose the bankroll again.
+FORCE_PAPER_UNTIL_EDGE = True
+if FORCE_PAPER_UNTIL_EDGE:
+    PAPER_TRADING = True
 PAPER_STARTING_SOL  = _env_float("PAPER_STARTING_SOL", 1.0)  # Virtual SOL balance for paper mode
 PAPER_TIME_EXIT_MIN = _env_int  ("PAPER_TIME_EXIT_MIN", 10)  # Force-exit paper positions after N minutes
 
